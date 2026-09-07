@@ -2,66 +2,156 @@ package com.cos.lspit.gesture.config
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Parsing matrix for the provider cursor cells: only an explicit 0 disables a
- * switch; null (column missing / provider first launch) and any other value
- * fail back to enabled so the hook keeps its proven default behavior.
+ * Parsing matrix for the provider cursor cells.
+ *
+ * The three veto switches (master/left/right) keep the proven fail-open
+ * semantic: only an explicit 0 disables; null/any-other fails back to enabled.
+ *
+ * mback is fail-closed: only an explicit 1 arms it; null (column missing /
+ * provider first launch) and any other value stay disabled, because mBack
+ * actively takes over Back/Home injection and must never enable by accident.
+ *
+ * barWidthDp is nullable and only binds within the accepted width range
+ * (80-120); null means "leave the system hint-bar width untouched".
  */
 class GestureConfigTest {
 
+    private fun v(
+        master: Int? = 1,
+        left: Int? = 1,
+        right: Int? = 1,
+        mback: Int? = 0,
+        barWidth: Int? = null,
+        version: Int? = 2,
+    ) = GestureConfig.fromValues(master, left, right, mback, barWidth, version)
+
+    // --- veto switches (fail-open, unchanged) ---
+
     @Test
     fun allOnSnapshotParsesOn() {
-        val config = GestureConfig.fromValues(1, 1, 1, 1)
+        val config = v(1, 1, 1, 0, null, 2)
         assertTrue(config.masterEnabled)
         assertTrue(config.leftEnabled)
         assertTrue(config.rightEnabled)
-        assertEquals(1, config.version)
+        assertFalse(config.mbackEnabled)
+        assertEquals(2, config.version)
     }
 
     @Test
     fun allOffSnapshotParsesOff() {
-        val config = GestureConfig.fromValues(0, 0, 0, 1)
+        val config = v(0, 0, 0, 0, null, 2)
         assertFalse(config.masterEnabled)
         assertFalse(config.leftEnabled)
         assertFalse(config.rightEnabled)
     }
 
     @Test
-    fun nullCellsFallBackToEnabled() {
-        val config = GestureConfig.fromValues(null, null, null, null)
+    fun nullVetoCellsFallBackToEnabled() {
+        val config = v(null, null, null, 0, null, 2)
         assertTrue(config.masterEnabled)
         assertTrue(config.leftEnabled)
         assertTrue(config.rightEnabled)
-        assertEquals(1, config.version)
     }
 
     @Test
-    fun invalidCellsFallBackToEnabled() {
-        val config = GestureConfig.fromValues(2, -1, 7, 3)
+    fun invalidVetoCellsFallBackToEnabled() {
+        val config = v(2, -1, 7, 0, null, 2)
         assertTrue(config.masterEnabled)
         assertTrue(config.leftEnabled)
         assertTrue(config.rightEnabled)
-        assertEquals(3, config.version)
+    }
+
+    // --- mback (fail-closed) ---
+
+    @Test
+    fun mbackOnParsesOn_whenExplicit1() {
+        val config = v(1, 1, 1, 1, null, 2)
+        assertTrue(config.mbackEnabled)
     }
 
     @Test
-    fun mixedSnapshotParsesPerSide() {
-        val config = GestureConfig.fromValues(1, 0, 1, 2)
-        assertTrue(config.masterEnabled)
-        assertFalse(config.leftEnabled)
-        assertTrue(config.rightEnabled)
-        assertEquals(2, config.version)
+    fun mbackOff_whenExplicit0() {
+        val config = v(1, 1, 1, 0, null, 2)
+        assertFalse(config.mbackEnabled)
     }
 
     @Test
-    fun defaultsKeepInterceptionEnabled() {
+    fun mbackDisabled_whenColumnMissing() {
+        val config = v(1, 1, 1, null, null, 2)
+        assertFalse(config.mbackEnabled)
+    }
+
+    @Test
+    fun mbackDisabled_whenUnparseable() {
+        val config = v(1, 1, 1, 7, null, 2)
+        assertFalse(config.mbackEnabled)
+    }
+
+    // --- barWidthDp (fail-closed to null / untouched) ---
+
+    @Test
+    fun barWidthParsesInRange() {
+        val config = v(1, 1, 1, 0, 100, 2)
+        assertEquals(100, config.barWidthDp)
+    }
+
+    @Test
+    fun barWidthNull_whenColumnMissing() {
+        val config = v(1, 1, 1, 0, null, 2)
+        assertNull(config.barWidthDp)
+    }
+
+    @Test
+    fun barWidthNull_whenBelowRange() {
+        assertNull(v(1, 1, 1, 0, 79, 2).barWidthDp)
+    }
+
+    @Test
+    fun barWidthNull_whenAboveRange() {
+        assertNull(v(1, 1, 1, 0, 121, 2).barWidthDp)
+    }
+
+    @Test
+    fun barWidthBoundary_inRange() {
+        assertEquals(80, v(1, 1, 1, 0, 80, 2).barWidthDp)
+        assertEquals(120, v(1, 1, 1, 0, 120, 2).barWidthDp)
+    }
+
+    // --- defaults ---
+
+    @Test
+    fun defaultsKeepInterceptionEnabled_mbackOff_widthNull() {
         val config = GestureConfig()
         assertTrue(config.masterEnabled)
         assertTrue(config.leftEnabled)
         assertTrue(config.rightEnabled)
-        assertEquals(1, config.version)
+        assertFalse(config.mbackEnabled)
+        assertNull(config.barWidthDp)
+        assertEquals(2, config.version)
     }
+
+    // --- legacy compatibility ---
+    // A pre-upgrade provider snapshot only has the 4 original columns. The
+    // new columns arrive as null, which must keep all three veto switches on
+    // and the new features safely off/untouched.
+
+    @Test
+    fun legacyFourColumnSnapshotStaysCompatible() {
+            // A pre-upgrade cursor only carried master,left,right,version columns.
+            // Simulate reading just those four (version cell = 1); the new mback
+            // and barWidthDp cells decode as null via their readNullableColumn
+            // paths, leaving the new features safely off/untouched.
+            val config = GestureConfig.fromValues(1, 1, 1, null, null, 1)
+            assertTrue(config.masterEnabled)
+            assertTrue(config.leftEnabled)
+            assertTrue(config.rightEnabled)
+            assertFalse(config.mbackEnabled)
+            assertNull(config.barWidthDp)
+            assertEquals(1, config.version)
+        }
 }
