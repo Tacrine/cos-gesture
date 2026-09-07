@@ -1,9 +1,0 @@
-﻿device_manager_apk_sha256=74d89370b4b17a94c130089b2868c3d6f289ab8c5c5715ba43a909d4bd6e216b
-device_manager_apk_path=/data/adb/modules/zygisk_lsposed/manager.apk
-command: adb -s 3B661M01NH500000 shell su -c sha256sum /data/adb/modules/zygisk_lsposed/manager.apk  (measured 2026-09-07T09:47+08:00)
-reference_manager_apk_sha256=74d89370b4b17a94c130089b2868c3d6f289ab8c5c5715ba43a909d4bd6e216b
-reference_source=https://lsposed.zip/  (host module.prop declared updateJson: https://lsposed.zip/update.json -> {"version":"v2.2.0","versionCode":7854,"zipUrl":"https://lsposed.zip"}; zip bundle at zipUrl contains manager.apk.sha256)
-reference_fetched_at=2026-09-07T09:47:27+08:00 (curl.exe -sS -L https://lsposed.zip/update.json and https://lsposed.zip/)
-device_matches_reference=True
-source_trust=reachable_official (host own declared updateJson source, reachable, named)
-authentic_official=true (manager.apk on device identical to host-declared update-channel bundle; scope note: lsposed.zip is the LSPosed IT/v2.x host-declared channel; official LSPosed GitHub stable line ends v1.9.2)
