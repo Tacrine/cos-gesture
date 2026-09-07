@@ -36,10 +36,12 @@ public final class SideBackHooker {
             log(module, 4, "HOST_API " + module.getApiVersion());
             if (!HookPolicy.ENABLED) {
                 log(module, 4, "HOOK_DISABLED");
+                GestureConfigClient.reportStatus(module, "HOOK_DISABLED", "policy-disabled");
                 return;
             }
             if (!hashMatches(param)) {
                 log(module, 4, "HASH_MISMATCH");
+                GestureConfigClient.reportStatus(module, "HASH_MISMATCH", "systemui-sha256");
                 return;
             }
             ClassLoader loader = param.getDefaultClassLoader();
@@ -48,17 +50,20 @@ public final class SideBackHooker {
                 target = Class.forName(HookPolicy.TARGET_CLASS, false, loader);
             } catch (Throwable ignored) {
                 log(module, 4, "NO_MATCH");
+                GestureConfigClient.reportStatus(module, "NO_MATCH", "class-not-found");
                 return;
             }
             Method method = findTarget(target, loader);
             if (method == null) {
                 log(module, 4, "NO_MATCH");
+                GestureConfigClient.reportStatus(module, "NO_MATCH", "method-not-found");
                 return;
             }
             // DESCRIPTOR_MATCH guard: wrong parameter list or return type (e.g. a
             // "Z" AOSP-style method) must fail closed to NO_MATCH, never a hook.
             if (!HookPolicy.descriptorMatches(method)) {
                 log(module, 4, "NO_MATCH");
+                GestureConfigClient.reportStatus(module, "NO_MATCH", "descriptor-mismatch");
                 return;
             }
             module.hook(method)
@@ -66,6 +71,9 @@ public final class SideBackHooker {
                     .intercept(chain -> handle(chain, module));
             log(module, 4, "HOOK_REGISTERED " + HookPolicy.TARGET_CLASS + "#"
                     + HookPolicy.TARGET_METHOD + HookPolicy.TARGET_DESCRIPTOR);
+            GestureConfigClient.init();
+            GestureConfigClient.reportStatus(module, "HOOK_REGISTERED",
+                    HookPolicy.TARGET_CLASS + "#" + HookPolicy.TARGET_METHOD);
         } catch (Throwable failure) {
             try {
                 module.log(6, TAG, "HOOK_DISABLED", failure);
@@ -119,6 +127,10 @@ public final class SideBackHooker {
         } catch (Throwable ignored) {
             return false; // cannot bound the display -> never drop an event blindly
         }
+        boolean vetoLeft = GestureConfigClient.isMasterEnabled()
+                && GestureConfigClient.isLeftEnabled();
+        boolean vetoRight = GestureConfigClient.isMasterEnabled()
+                && GestureConfigClient.isRightEnabled();
         return SideGesturePolicy.shouldVeto(
                 event.getActionMasked(),
                 event.getSource(),
@@ -126,7 +138,9 @@ public final class SideBackHooker {
                 event.getX(0),
                 event.getY(0),
                 width,
-                height);
+                height,
+                vetoLeft,
+                vetoRight);
     }
 
     private static void log(XposedModule module, int priority, String message) {

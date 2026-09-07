@@ -32,15 +32,19 @@ public final class SideGesturePolicy {
 
     /**
      * @return {@code true} only for a touchscreen-finger ACTION_DOWN inside the
-     *         left/right side-edge region and outside the status bar / bottom strip.
+     *         left/right side-edge region and outside the status bar / bottom strip,
+     *         with that side's runtime switch enabled (vetoLeft / vetoRight).
      */
     public static boolean shouldVeto(int action, int source, int toolType,
-            float x, float y, int displayWidth, int displayHeight) {
+            float x, float y, int displayWidth, int displayHeight,
+            boolean vetoLeft, boolean vetoRight) {
         if (action != ACTION_DOWN) return false;
         if (source != SOURCE_TOUCHSCREEN) return false;
         if (toolType != TOOL_TYPE_FINGER) return false;
         if (y <= STATUS_BAR_H) return false;                       // status-bar area
         if (y >= displayHeight - BOTTOM_STRIP_H) return false;     // bottom Home/Recents strip
-        return x < SIDE_W || x > displayWidth - SIDE_W;
+        boolean left = x < SIDE_W;
+        boolean right = x > displayWidth - SIDE_W;
+        return (left && vetoLeft) || (right && vetoRight);
     }
 }
