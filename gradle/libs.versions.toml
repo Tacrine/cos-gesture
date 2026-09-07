@@ -22,6 +22,7 @@ miuix-ui = { group = "top.yukonga.miuix.kmp", name = "miuix-ui", version.ref = "
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 libxposed-api = { group = "io.github.libxposed", name = "api", version.ref = "libxposedApi" }
 shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
+shizuku-aidl = { group = "dev.rikka.shizuku", name = "aidl", version.ref = "shizuku" }
 shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref = "shizuku" }
 
 [plugins]

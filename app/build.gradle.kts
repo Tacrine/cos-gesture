@@ -29,5 +29,8 @@ kotlin {
 
 dependencies {
     compileOnly("io.github.libxposed:api:102.0.0")
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.aidl)
     testImplementation("junit:junit:4.13.2")
 }
