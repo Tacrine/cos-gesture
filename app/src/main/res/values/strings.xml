@@ -1,3 +1,17 @@
 <resources>
     <string name="module_description">COS16 Gesture libxposed module</string>
+    <string name="app_name">COS16 手势</string>
+    <string name="settings_title">侧滑返回拦截</string>
+    <string name="switch_master">拦截总开关</string>
+    <string name="switch_left">拦截左侧边缘</string>
+    <string name="switch_right">拦截右侧边缘</string>
+    <string name="section_scope">作用域</string>
+    <string name="status_label">Hook 状态</string>
+    <string name="status_unknown">未回报（SystemUI 未重启或模块未启用）</string>
+    <string name="btn_restart">重启作用域（SystemUI）</string>
+    <string name="dialog_restart_title">确认重启</string>
+    <string name="dialog_restart_message">将结束 SystemUI 进程并由系统自动重启，屏幕状态栏/导航栏会短暂消失后恢复。继续？</string>
+    <string name="restart_result_ok">已执行重启指令</string>
+    <string name="restart_result_manual_title">需要手动重启</string>
+    <string name="restart_result_manual">未检测到 Root/Shizuku 权限。请重启手机，或在 LSP-IT 中重新启用模块。</string>
 </resources>
