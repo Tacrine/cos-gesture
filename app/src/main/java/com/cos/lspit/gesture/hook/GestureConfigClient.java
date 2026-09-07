@@ -7,6 +7,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Looper;
 import android.util.Log;
 import io.github.libxposed.api.XposedModule;
 
@@ -24,10 +25,15 @@ public final class GestureConfigClient {
             Uri.parse("content://com.cos.lspit.gesture.config/config");
     private static final Uri STATUS_URI =
             Uri.parse("content://com.cos.lspit.gesture.config/status");
+    private static final int INIT_MAX_RETRIES = 20;
+    private static final long INIT_RETRY_DELAY_MS = 500L;
+    private static int initRetriesLeft = INIT_MAX_RETRIES;
 
     private static volatile boolean masterEnabled = true;
     private static volatile boolean leftEnabled = true;
     private static volatile boolean rightEnabled = true;
+
+    private static volatile boolean initialized = false;
 
     private GestureConfigClient() {}
 
@@ -37,22 +43,55 @@ public final class GestureConfigClient {
 
     public static boolean isRightEnabled() { return rightEnabled; }
 
-    /** Loads the first snapshot and starts the live observer. Idempotent-guarded. */
+    /**
+     * Loads the first snapshot and starts the live observer. The host
+     * Application may not exist yet when the module registers its hooks
+     * (onPackageLoaded fires before Application.onCreate), so the context
+     * lookup is retried on the main looper until it succeeds.
+     */
     public static void init() {
-        Context context = currentContext();
-        if (context == null) return;
-        refresh(context);
-        HandlerThread thread = new HandlerThread("cos16-gesture-cfg");
-        thread.start();
-        Handler handler = new Handler(thread.getLooper());
-        context.getContentResolver().registerContentObserver(
-                CONFIG_URI, true, new ContentObserver(handler) {
-                    @Override
-                    public void onChange(boolean selfChange) {
-                        Context current = currentContext();
-                        if (current != null) refresh(current);
-                    }
-                });
+        if (initialized) return;
+        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (initialized) return;
+                Context context = currentContext();
+                if (context == null) {
+                    retryOrFail("no-application-context");
+                    return;
+                }
+                HandlerThread thread = new HandlerThread("cos16-gesture-cfg");
+                thread.start();
+                Handler handler = new Handler(thread.getLooper());
+                try {
+                    context.getContentResolver().registerContentObserver(
+                            CONFIG_URI, true, new ContentObserver(handler) {
+                                @Override
+                                public void onChange(boolean selfChange) {
+                                    Context current = currentContext();
+                                    if (current != null) refresh(current);
+                                }
+                            });
+                } catch (Throwable failure) {
+                    Log.w(TAG, "CONFIG_OBSERVER_FAILED " + failure);
+                }
+                refresh(context);
+                initialized = true;
+            }
+        }, 0L);
+    }
+
+    private static void retryOrFail(String reason) {
+        if (initRetriesLeft-- <= 0) {
+            Log.w(TAG, "CONFIG_INIT_FAILED " + reason);
+            return;
+        }
+        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                init();
+            }
+        }, INIT_RETRY_DELAY_MS);
     }
 
     /** Re-queries the provider; any failure keeps the current snapshot. */
@@ -68,8 +107,9 @@ public final class GestureConfigClient {
             if (right >= 0) rightEnabled = right != 0;
             Log.i(TAG, "CONFIG_UPDATE master=" + masterEnabled
                     + " left=" + leftEnabled + " right=" + rightEnabled);
-        } catch (Throwable ignored) {
-            // Keep current snapshot; never break SystemUI.
+        } catch (Throwable failure) {
+            // Keep current snapshot; never break SystemUI, but make the failure visible.
+            Log.w(TAG, "CONFIG_REFRESH_FAILED " + failure);
         }
     }
 
@@ -95,8 +135,9 @@ public final class GestureConfigClient {
             values.put("detail", detail == null ? "" : detail);
             values.put("at_millis", System.currentTimeMillis());
             context.getContentResolver().insert(STATUS_URI, values);
-        } catch (Throwable ignored) {
-            // Status reporting must never affect SystemUI.
+        } catch (Throwable failure) {
+            // Status reporting must never affect SystemUI, but make the failure visible.
+            Log.w(TAG, "STATUS_REPORT_FAILED " + failure);
         }
     }
 

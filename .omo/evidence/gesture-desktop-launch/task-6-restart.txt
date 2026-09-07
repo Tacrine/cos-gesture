@@ -1,0 +1,15 @@
+
+=== BUG FOUND DURING TASK 6 (2026-09-07) ===
+Symptom: in-app toggles never affected interception (VETO continued with master=off);
+UI status line stuck at "Î´»Ø±¨" (no STATUS_REPORTED) -> BOTH provider query and insert
+from SystemUI side silently failed.
+Root cause: GestureConfigClient.init() resolved ActivityThread.currentApplication()
+synchronously during onPackageLoaded, which fires BEFORE Application creation -> null
+-> init() returned early -> observer never registered, snapshot stuck at all-true default.
+Fix: retry context lookup on main looper (20 x 500ms) until the host Application exists;
+added CONFIG_INIT_FAILED / CONFIG_OBSERVER_FAILED / CONFIG_REFRESH_FAILED /
+STATUS_REPORT_FAILED diagnostic logs to previously silent catches.
+Verification: :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease all exit 0.
+Device re-verification PENDING: device 3B661M01NH500000 went offline (USB) before the
+fixed APK could be installed; restart SystemUI after install and confirm CONFIG_UPDATE
+appears on each toggle and VETO stops with master=off.
