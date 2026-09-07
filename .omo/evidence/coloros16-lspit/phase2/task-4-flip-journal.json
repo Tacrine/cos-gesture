@@ -1,0 +1,25 @@
+{
+  "schema": "coloros16-lspit/phase2/task-4-flip-journal",
+  "task": "Task 4 - flip journal: Task-1 host NO_GO -> SUPPORTED (host) on fresh measurement",
+  "measured_at": "2026-09-07T09:49:31+08:00",
+  "old_status": "NO_GO",
+  "old_status_context": "task-1-reopen.json and host-contract.json status=NO_GO: host identity/version/API-102 + ColorOS16 on-device proof was the missing evidence",
+  "new_status": "SUPPORTED",
+  "flip_basis": [
+    "device_identity: sdk=36, oplusrom=V16.1.0, device=OP5D2BL1, fingerprint OnePlus/PKG110/OP5D2BL1:16/UKQ1.231108.001/V.13b17ec_10f5eb5_10fa46a:user/release-keys matches discovery.json (fresh getprop 2026-09-07T09:47)",
+    "host_module_prop: /data/adb/modules/zygisk_lsposed/module.prop => id=zygisk_lsposed name=LSPosed version='v2.2.0 (7854)' versionCode=7854; api102_floor_satisfied=true (7854 >= 7769)",
+    "zygisk_next_module_prop: /data/adb/modules/zygisksu/module.prop => Zygisk Next version='1.5.0 (843-5217106-release)' versionCode=843 (KernelSU 35115 root)",
+    "zygisk_loading_lsposed: true - su -c ps -A shows live 'zn-zygisk-companion64 zygisk_lsposed' pid 16861 (+ pid 6149) and zn-nsdaemon-zygote* daemons",
+    "lspd_daemon_alive: true pid=3500",
+    "lspd_config_dir_listing: /data/adb/lspd/config/ contains modules_config.db + wal/shm + dex2oat_service.db",
+    "manager_apk: device sha 74d89370b4b17a94c130089b2868c3d6f289ab8c5c5715ba43a909d4bd6e216b == reference manager.apk.sha256 fetched from host-declared update channel https://lsposed.zip/ (curl.exe 2026-09-07T09:47:27); source_trust=reachable_official, authentic_official=true (host-declared channel scope)",
+    "org_lsposed_manager_installed: false (parasitic-manager normal state, recorded not failed)",
+    "sqlite3_on_device: false (headless-enable uses host python per plan)",
+    "live_injection_systemui: true - 296 (com.android.systemui) injection lines dated 2026-09-07 e.g. 07:54:11.672 (com.android.systemui)[com.rikumi.colorosmod,ColorOSMod,...] (module code loaded+ran in SystemUI scope)",
+    "live_injection_modern_api101_module: true - 2026-09-07T09:30:55.405 (com.heytap.mydevices)[com.tlsu.opluscamerapro,OPCameraPro - ModernApi101,...] 'Modern API101 entry attached in process com.heytap.mydevices'",
+    "systemui_sha256: 7144D7E0E7DA46BC5F408C71C7B8D761DF97EE1C6B52F99FA2F40577183B71B8 == expected (firmware-drift gate PASS, 94,761,448 bytes)"
+  ],
+  "gate_semantics": "SUPPORTED (host) per plan Task 4 acceptance: sdk=36 AND host versionCode>=7769 AND zygisk-next present AND lspd alive AND systemui sha matches AND live SystemUI-scope injection observed. All measured fresh this task; none copied from old snapshots.",
+  "blocks": ["Task 5 (module rebuild)", "Task 6 (deploy+enable)", "Task 7 (device QA)", "Task 8 (release evidence)"],
+  "commit_message": "chore(host): verify on-device LSPosed 7854 host and flip Task-1 gate"
+}
