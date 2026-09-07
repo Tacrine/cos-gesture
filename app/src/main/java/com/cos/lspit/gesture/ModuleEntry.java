@@ -1,5 +1,6 @@
 package com.cos.lspit.gesture;
 
+import com.cos.lspit.gesture.hook.NavigationHandleHooks;
 import com.cos.lspit.gesture.hook.SideBackHooker;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam;
@@ -27,6 +28,7 @@ public final class ModuleEntry extends XposedModule {
     public void onPackageLoaded(PackageLoadedParam param) {
         if (SYSTEM_UI.equals(param.getPackageName())) {
             SideBackHooker.onPackageLoaded(this, param);
+                NavigationHandleHooks.register(this, param);
+            }
         }
-    }
 }
