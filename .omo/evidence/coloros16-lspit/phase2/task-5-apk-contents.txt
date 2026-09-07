@@ -1,0 +1,11 @@
+﻿# jar tf app\build\outputs\apk\release\app-release-unsigned.apk
+# started 2026-09-07 09:58:28
+
+META-INF/com/android/build/gradle/app-metadata.properties
+META-INF/version-control-info.textproto
+classes.dex
+META-INF/xposed/java_init.list
+META-INF/xposed/module.prop
+META-INF/xposed/scope.list
+AndroidManifest.xml
+resources.arsc

@@ -1,0 +1,3 @@
+-keep class io.github.libxposed.api.** { *; }
+-keep class com.cos.lspit.gesture.ModuleEntry { *; }
+-keep class com.cos.lspit.gesture.hook.** { *; }
