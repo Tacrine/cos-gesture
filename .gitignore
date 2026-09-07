@@ -1,0 +1,32 @@
+# Gradle / Android build outputs
+.gradle/
+build/
+app/build/
+local.properties
+*.apk
+*.aab
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Device artifacts (pulled APKs, jars, logcat, getevent) - never commit binaries
+*.dex
+*.odex
+*.vdex
+*.oat
+
+# Session / local
+*.log
+captures/
+
+# Planning / session state (plans and committed evidence stay tracked)
+.omo/recovery/
+.omo/drafts/
+.omo/evidence/omo-port-vscode-copilot/
+.kotlin/
