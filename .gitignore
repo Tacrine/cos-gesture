@@ -25,14 +25,8 @@ Thumbs.db
 *.log
 captures/
 
-# OMO tooling: plans are tracked (work plans are project docs), everything else is local
-.omo/recovery/
-.omo/drafts/
-.omo/evidence/
-.omo/*.png
-.omo/*.jpg
-.omo/*.log
-.omo/*.txt
+# OMO tooling: fully local — plans/evidence/screenshots are work artifacts, not source
+.omo/
 .kotlin/
 
 # Reverse-engineered / decompiled artifacts (never commit)
