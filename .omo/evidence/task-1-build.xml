@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.cos.lspit.gesture.hook.SystemHideTest" tests="14" skipped="0" failures="0" errors="0" timestamp="2026-09-08T05:03:37.941Z" hostname="REVI-OS" time="0.022">
+  <properties/>
+  <testcase name="hideRequest_eight_barOnlyOn_clamp" classname="com.cos.lspit.gesture.hook.SystemHideTest" time="0.015"/>
+  <testcase name="hideRequest_one_mbackOn_clamp" classname="com.cos.lspit.gesture.hook.SystemHideTest" time="0.0"/>
+  <testcase name="proxyHide_unexpectedValue_mbackOn" classname="com.cos.lspit.gesture.hook.SystemHideTest" time="0.001"/>
+  <testcase name="proxyHide_typeOne_bothOff_respectSystem" classname="com.cos.lspit.gesture.hook.SystemHideTest" time="0.0"/>
+  <testcase name="hideRequest_eight_bothOff_respectSystem" classname="com.cos.lspit.gesture.hook.SystemHideTest" time="0.0"/>
+  <testcase name="hideRequest_one_bothOn_clamp" classname="com.cos.lspit.gesture.hook.SystemHideTest" time="0.001"/>
+  <testcase name="proxyHide_typeOne_mbackOn" classname="com.cos.lspit.gesture.hook.SystemHideTest" time="0.0"/>
+  <testcase name="hideRequest_eight_mbackOn_clamp" classname="com.cos.lspit.gesture.hook.SystemHideTest" time="0.0"/>
+  <testcase name="proxyHide_typeOne_barOnlyOn" classname="com.cos.lspit.gesture.hook.SystemHideTest" time="0.001"/>
+  <testcase name="hideRequest_one_barOnlyOn_clamp" classname="com.cos.lspit.gesture.hook.SystemHideTest" time="0.0"/>
+  <testcase name="proxyHide_typeZero_mbackOn_noOverride" classname="com.cos.lspit.gesture.hook.SystemHideTest" time="0.0"/>
+  <testcase name="hideRequest_one_bothOff_respectSystem" classname="com.cos.lspit.gesture.hook.SystemHideTest" time="0.001"/>
+  <testcase name="hideRequest_eight_bothOn_clamp" classname="com.cos.lspit.gesture.hook.SystemHideTest" time="0.0"/>
+  <testcase name="showRequest_anyCombo_noClamp" classname="com.cos.lspit.gesture.hook.SystemHideTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

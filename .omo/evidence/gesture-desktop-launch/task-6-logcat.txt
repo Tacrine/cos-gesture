@@ -1,9 +1,0 @@
-﻿
-09-07 18:39:45.009  3384 29505 I LSPosedLogDaemon: (com.android.systemui)[com.cos.lspit.gesture,COS16-Gesture,f2a-1a07b73d970-2-1,0,1] MODULE_LOADED api=102 framework=LSPosed/2.2.0
-09-07 18:39:45.052  3384 29505 I LSPosedLogDaemon: (com.android.systemui)[com.cos.lspit.gesture,COS16-Gesture,f2a-1a07b73d970-2-2,0,1] MODULE_READY
-09-07 18:39:45.053  3384 29505 I LSPosedLogDaemon: (com.android.systemui)[com.cos.lspit.gesture,COS16-Gesture,f2a-1a07b73d970-2-3,0,1] HOST_API 102
-09-07 18:39:45.146  3384 29505 I LSPosedLogDaemon: (com.android.systemui)[com.cos.lspit.gesture,COS16-Gesture,f2a-1a07b73d970-2-4,0,1] HOOK_REGISTERED com.oplus.systemui.navigationbar.gesture.sidegesture.SideGestureDetector#onMotionEventImpl(Landroid/view/MotionEvent;)V
-09-07 18:39:45.146  3384 29505 I LSPosedLogDaemon: (com.android.systemui)[com.cos.lspit.gesture,COS16-Gesture,f2a-1a07b73d970-2-5,0,1] STATUS HOOK_REGISTERED com.oplus.systemui.navigationbar.gesture.sidegesture.SideGestureDetector#onMotionEventImpl
-
-
-

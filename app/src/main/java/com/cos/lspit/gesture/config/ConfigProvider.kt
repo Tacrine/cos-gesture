@@ -19,7 +19,7 @@ class ConfigProvider : ContentProvider() {
         const val AUTHORITY = "com.cos.lspit.gesture.config"
         val CONFIG_URI: Uri = Uri.parse("content://$AUTHORITY/config")
         val STATUS_URI: Uri = Uri.parse("content://$AUTHORITY/status")
-        val CONFIG_COLUMNS = arrayOf("master", "left", "right", "mback", "barWidthDp", "version")
+        val CONFIG_COLUMNS = arrayOf("master", "left", "right", "mback", "barWidthDp", "barOnly", "hintTapShield", "barHidden", "version")
         private const val STATUS_PREFS = "gesture_status"
     }
 
@@ -42,6 +42,9 @@ class ConfigProvider : ContentProvider() {
                     if (config.rightEnabled) 1 else 0,
                             if (config.mbackEnabled) 1 else 0,
                             config.barWidthDp,
+                            if (config.barOnlyEnabled) 1 else 0,
+                            if (config.hintTapShieldEnabled) 1 else 0,
+                            if (config.barHiddenEnabled) 1 else 0,
                             config.version,
                         ),
                     )

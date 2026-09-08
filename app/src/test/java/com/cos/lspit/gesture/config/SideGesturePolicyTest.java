@@ -110,4 +110,146 @@ public class SideGesturePolicyTest {
         assertFalse(SideGesturePolicy.shouldVeto(
                 ACTION_DOWN, SOURCE_TOUCHSCREEN, TOOL_TYPE_FINGER, 2f, 1300f, DISPLAY_W, DISPLAY_H, false, false));
     }
+
+    // --- Bar-only gate: bottom-strip gestures only fire when the DOWN lands on the hint bar ---
+
+    private static final float DENSITY = 2.75f; // measured device density
+
+    @Test
+    public void barOnlyOffNeverVetoesBottomDown() {
+        assertFalse(SideGesturePolicy.shouldVetoBarOnly(
+                ACTION_DOWN, SOURCE_TOUCHSCREEN, TOOL_TYPE_FINGER, 200f, 2372f,
+                DISPLAY_W, DISPLAY_H, false, 78, DENSITY));
+    }
+
+    @Test
+    public void bottomOffBarDownVetoes() {
+        // x=200 (outside the 78dp bar band 422..658) in the bottom strip -> gesture dropped.
+        assertTrue(SideGesturePolicy.shouldVetoBarOnly(
+                ACTION_DOWN, SOURCE_TOUCHSCREEN, TOOL_TYPE_FINGER, 200f, 2372f,
+                DISPLAY_W, DISPLAY_H, true, 78, DENSITY));
+    }
+
+    @Test
+    public void bottomCenterDownNotVetoed() {
+        // x=540 is on the hint bar -> bottom gestures still fire.
+        assertFalse(SideGesturePolicy.shouldVetoBarOnly(
+                ACTION_DOWN, SOURCE_TOUCHSCREEN, TOOL_TYPE_FINGER, 540f, 2372f,
+                DISPLAY_W, DISPLAY_H, true, 78, DENSITY));
+    }
+
+    @Test
+    public void bottomBarBandEdgeIncludedNotVetoed() {
+        // x=658 is exactly the 78dp bar band edge (incl. 4dp padding) -> still on the bar.
+        assertFalse(SideGesturePolicy.shouldVetoBarOnly(
+                ACTION_DOWN, SOURCE_TOUCHSCREEN, TOOL_TYPE_FINGER, 658f, 2370f,
+                DISPLAY_W, DISPLAY_H, true, 78, DENSITY));
+    }
+
+    @Test
+    public void bottomJustOutsideBarBandVetoes() {
+        // x=660 is 2px past the 78dp band edge -> vetoed.
+        assertTrue(SideGesturePolicy.shouldVetoBarOnly(
+                ACTION_DOWN, SOURCE_TOUCHSCREEN, TOOL_TYPE_FINGER, 660f, 2370f,
+                DISPLAY_W, DISPLAY_H, true, 78, DENSITY));
+    }
+
+    @Test
+    public void defaultBarWidthGateUses40Dp() {
+        // 40dp bar band is 540+-66 (474..606): x=440 off-band vetoes, x=500 in-band does not.
+        assertTrue(SideGesturePolicy.shouldVetoBarOnly(
+                ACTION_DOWN, SOURCE_TOUCHSCREEN, TOOL_TYPE_FINGER, 440f, 2372f,
+                DISPLAY_W, DISPLAY_H, true, 40, DENSITY));
+        assertFalse(SideGesturePolicy.shouldVetoBarOnly(
+                ACTION_DOWN, SOURCE_TOUCHSCREEN, TOOL_TYPE_FINGER, 500f, 2372f,
+                DISPLAY_W, DISPLAY_H, true, 40, DENSITY));
+    }
+
+    @Test
+    public void aboveBottomStripDownNotVetoed() {
+        // y=2000 is above the 66px bottom strip -> normal app touch, never vetoed.
+        assertFalse(SideGesturePolicy.shouldVetoBarOnly(
+                ACTION_DOWN, SOURCE_TOUCHSCREEN, TOOL_TYPE_FINGER, 200f, 2000f,
+                DISPLAY_W, DISPLAY_H, true, 78, DENSITY));
+    }
+
+    @Test
+    public void barOnlyNonFingerNotVetoed() {
+        assertFalse(SideGesturePolicy.shouldVetoBarOnly(
+                ACTION_DOWN, SOURCE_TOUCHSCREEN, 2, 200f, 2372f,
+                DISPLAY_W, DISPLAY_H, true, 78, DENSITY));
+    }
+
+    @Test
+    public void barOnlyStylusNotVetoed() {
+        assertFalse(SideGesturePolicy.shouldVetoBarOnly(
+                ACTION_DOWN, SOURCE_STYLUS, TOOL_TYPE_FINGER, 200f, 2372f,
+                DISPLAY_W, DISPLAY_H, true, 78, DENSITY));
+    }
+
+    @Test
+    public void barOnlyNonDownActionNotVetoed() {
+        assertFalse(SideGesturePolicy.shouldVetoBarOnly(
+                ACTION_MOVE, SOURCE_TOUCHSCREEN, TOOL_TYPE_FINGER, 200f, 2372f,
+                DISPLAY_W, DISPLAY_H, true, 78, DENSITY));
+    }
+
+    // --- Launcher home-gesture region narrow (barOnly) ---
+
+    @Test
+    public void narrowFullWidthBandToDefault40Dp() {
+        // Full-width bottom strip [0..1080] -> 40dp band is 540 +-66 = 474..606.
+        float[] rect = {0f, 2310f, 1080f, 2376f};
+        assertTrue(SideGesturePolicy.narrowBandToBar(rect, 40, DENSITY));
+        assertEquals(474f, rect[0], 0.5f);
+        assertEquals(606f, rect[2], 0.5f);
+        // Vertical extent is untouched by the horizontal narrow.
+        assertEquals(2310f, rect[1], 0.5f);
+        assertEquals(2376f, rect[3], 0.5f);
+    }
+
+    @Test
+    public void narrowFullWidthBandToWidest160Dp() {
+        // 160dp band is 540 +-231 = 309..771.
+        float[] rect = {0f, 2310f, 1080f, 2376f};
+        assertTrue(SideGesturePolicy.narrowBandToBar(rect, 160, DENSITY));
+        assertEquals(309f, rect[0], 0.5f);
+        assertEquals(771f, rect[2], 0.5f);
+    }
+
+    @Test
+    public void narrowOffCenterBandStaysCenteredOnItsOwnWidth() {
+        // A region already offset (e.g. another orientation) is centered on itself,
+        // not on the display center: 500..900 narrows symmetrically around 700.
+        float[] rect = {500f, 0f, 900f, 100f};
+        assertTrue(SideGesturePolicy.narrowBandToBar(rect, 40, DENSITY));
+        assertEquals(634f, rect[0], 0.5f);
+        assertEquals(766f, rect[2], 0.5f);
+    }
+
+    @Test
+    public void narrowClampsToBandSmallerThanHintBand() {
+        // A 100px-wide band can never grow past its own edges.
+        float[] rect = {600f, 0f, 700f, 100f};
+        assertTrue(SideGesturePolicy.narrowBandToBar(rect, 160, DENSITY));
+        assertEquals(600f, rect[0], 0.5f);
+        assertEquals(700f, rect[2], 0.5f);
+    }
+
+    @Test
+    public void narrowDegenerateBandReturnsFalse() {
+        // A zero-width region must report "cannot narrow" so the caller leaves it alone.
+        float[] rect = {540f, 0f, 540f, 100f};
+        assertFalse(SideGesturePolicy.narrowBandToBar(rect, 40, DENSITY));
+        assertEquals(540f, rect[0], 0.5f);
+        assertEquals(540f, rect[2], 0.5f);
+    }
+
+    @Test
+    public void barHalfWidthMatchesMeasuredPadding() {
+        // 40dp -> (40*2.75)/2 + 4*2.75 = 55 + 11 = 66px.
+        assertEquals(66f, SideGesturePolicy.barHalfWidthPx(40, DENSITY), 0.01f);
+        // 160dp -> (160*2.75)/2 + 11 = 231px.
+        assertEquals(231f, SideGesturePolicy.barHalfWidthPx(160, DENSITY), 0.01f);
+    }
 }

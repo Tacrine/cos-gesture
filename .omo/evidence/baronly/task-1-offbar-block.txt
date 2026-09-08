@@ -1,0 +1,25 @@
+﻿Task 1: off-bar bottom gesture block matrix
+Date: 2026-09-08 01:04-01:06 (device local)
+Device: 1080x2376 density 2.75, band(barWidthDp=89)=406.6..673.4px, bottom strip y>=2310
+Config at test: master=1 left=1 right=1 mback=1 barWidthDp=89 barOnly=1 (toggled ON via app UI tap 958,2034)
+
+Step 0 (injection path control): input swipe 540 2340 540 1400 250
+  -> PASS down x=540.0 y=2340.0 + handleNormalGestureEnd: endTarget = HOME  [PASS]
+
+G1 off-bar up (home): input swipe 200 2340 200 1400 250
+  -> VETO barOnly down x=200 y=2340 barOnly=true
+  -> handleNormalGestureEnd: endTarget = HOME
+  -> focus: settings -> launcher  [FAILURE-B: veto logged, gesture NOT blocked]
+G2 off-bar slow up (recents): input swipe 200 2340 200 1600 900
+  -> VETO=True END=True FOCUS_SAME=False  [FAILURE-B]
+G3 off-bar L->R task switch: input swipe 200 2340 900 2340 250
+  -> VETO=True END=True FOCUS_SAME=False  [FAILURE-B]
+G4 off-bar R->L task switch: input swipe 900 2340 200 2340 250
+  -> VETO=True END=True (focus overlay changed)  [FAILURE-B]
+
+Note: first run before barOnly was ON showed barOnly=0 in provider (switch was off) - initial
+"no VETO" run was invalid; after toggling ON all four off-bar gestures log VETO.
+
+Verdict: FAILURE-B on all 4 gestures - SideGestureDetector#onMotionEventImpl DOWN veto is
+executed but does NOT prevent AbsSwipeUpHandler from completing the gesture.
+=> Conditional task 5 TRIGGERED (fallback interception layer needed).
