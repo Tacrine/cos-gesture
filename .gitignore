@@ -41,3 +41,5 @@ apk_extract/
 # Local summary drafts
 /summary*.txt
 *gesture-summary*.txt
+# Reverse-engineering / decompile dumps (large text artifacts, never commit)
+apk_extract/
