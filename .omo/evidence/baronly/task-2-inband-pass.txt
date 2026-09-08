@@ -1,0 +1,12 @@
+﻿Task 2: in-band bottom gesture pass matrix
+Date: 2026-09-08 01:07
+Config: barOnly=1 barWidthDp=89 (band 406.6..673.4px)
+
+g1 in-band up (home): input swipe 540 2340 540 1400 250
+  -> PASS down + handleNormalGestureEnd HOME, focus -> launcher  [PASS]
+g2 in-band slow up (recents): input swipe 540 2340 540 1600 900
+  -> PASS=True END=True, focus changed (recents/launcher)  [PASS]
+g3 in-band L->R (task switch, from home): input swipe 540 2340 900 2200 250
+  -> PASS=True END=True  [PASS]
+
+Verdict: PASS on all 3 - in-band gestures unaffected by barOnly gate.

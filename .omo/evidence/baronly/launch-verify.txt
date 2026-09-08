@@ -1,0 +1,30 @@
+launch-verify — DEVICE OFFLINE (blocked)
+Date: 2026-09-08
+Status: CODE+INSTALL+scope DB complete; device rebooted via adb at ~07:40 then
+  went unreachable. 50+ min no network presence (no ping, no mDNS, no adb).
+
+Timeline:
+- 07:40 adb reboot issued (shell 366 waiting boot_completed).
+- 07:45+ 10.168.1.125 offline (Destination host unreachable via gateway .110).
+- 08:00 subnet sweep: only .1 (router) + .110 (this PC) + .131 alive.
+- .131 probed: SMTP/POP/IMAP + clash-ish ports (25/110/143/7897/9797/9898),
+  adb connect refused on all → NOT the phone (looks like NAS/mail host).
+- 08:40 full sweep: only .1 + .110. Phone completely absent from LAN.
+
+Hypotheses (in order of likelihood):
+  1. Wireless debugging requires re-enable after reboot; port changed and
+     mDNS/adb discovery off until user toggles it again (needs screen).
+  2. Phone WiFi didn't auto-reconnect (screen locked / wifi sleep).
+  3. Phone stuck at boot / powered off (needs physical check).
+  4. Boot problem from LSPosed scope DB edit (unlikely; edit was VACUUM INTO
+     single file, db intact, chmod 666 — same pattern used successfully before).
+
+Action: background poll (shell 399) 40 min for .125 or any new host. If device
+reconnects at a new IP/port, user must provide it (wireless debug pair screen),
+or connect USB once. Everything needed for verify is staged and ready:
+  - module APK installed (pre-reboot)
+  - scope DB contains launcher (pre-reboot)
+  - code built + unit tests green
+Resume point: launch-verify task in .omo/plans/baronly-gate-verify-fix.md.
+
+[2026-09-08 08:07:36] Updated: sweeps at 08:xx found transient new hosts .106/.109/.132/.175 but NO open adb ports (5555/37000-45999) on any. .125/.131 permanently gone from ARP/ICMP. Poller 408 still watching (2.5h window). Phone absent from LAN >30min post-reboot = physical blocker confirmed. Resume needs user action.
