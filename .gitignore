@@ -25,11 +25,21 @@ Thumbs.db
 *.log
 captures/
 
-# Planning / session state (plans and committed evidence stay tracked)
+# OMO tooling: plans are tracked (work plans are project docs), everything else is local
 .omo/recovery/
 .omo/drafts/
-.omo/evidence/omo-port-vscode-copilot/
+.omo/evidence/
+.omo/*.png
+.omo/*.jpg
+.omo/*.log
+.omo/*.txt
 .kotlin/
 
+# Reverse-engineered / decompiled artifacts (never commit)
+apk_extract/
+
+# Local summary drafts
+/summary*.txt
+*gesture-summary*.txt
 # Reverse-engineering / decompile dumps (large text artifacts, never commit)
 apk_extract/
