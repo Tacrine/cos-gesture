@@ -28,6 +28,11 @@ public final class SideGesturePolicy {
     public static final int SOURCE_TOUCHSCREEN = 0x00001002;
     public static final int TOOL_TYPE_FINGER = 1;
 
+    /** Hint-bar length (dp) assumed when the module left the width untouched. */
+    public static final int DEFAULT_BAR_DP = 40;
+    /** Extra band around the bar (dp) where a DOWN still counts as "on the bar". */
+    public static final float BAR_GATE_PADDING_DP = 4f;
+
     private SideGesturePolicy() {}
 
     /**
@@ -46,5 +51,54 @@ public final class SideGesturePolicy {
         boolean left = x < SIDE_W;
         boolean right = x > displayWidth - SIDE_W;
         return (left && vetoLeft) || (right && vetoRight);
+    }
+
+    /**
+     * Bar-only gate: when armed, a bottom-strip gesture only fires if the finger
+     * first lands on the hint bar. A touchscreen-finger ACTION_DOWN in the bottom
+     * Home/Recents strip whose x is off the (custom-width) hint-bar band is vetoed
+     * so the whole bottom region stops triggering navigation; an on-bar DOWN passes.
+     *
+     * @return {@code true} to veto the DOWN (drop the bottom gesture entirely).
+     */
+    public static boolean shouldVetoBarOnly(int action, int source, int toolType,
+            float x, float y, int displayWidth, int displayHeight,
+            boolean barOnly, int barWidthDp, float density) {
+        if (!barOnly) return false;
+        if (action != ACTION_DOWN) return false;
+        if (source != SOURCE_TOUCHSCREEN) return false;
+        if (toolType != TOOL_TYPE_FINGER) return false;
+        if (y < displayHeight - BOTTOM_STRIP_H) return false;      // outside the bottom strip
+        float center = displayWidth / 2f;
+        return Math.abs(x - center) > barHalfWidthPx(barWidthDp, density); // off the hint-bar band
+    }
+
+    /**
+     * Half-width (px) of the hint-bar band: half the user bar length plus the
+     * gate padding. Shared by the SystemUI DOWN veto and the launcher region
+     * narrow so the two always agree on what counts as "on the bar".
+     */
+    public static float barHalfWidthPx(int barWidthDp, float density) {
+        return (barWidthDp * density) / 2f + BAR_GATE_PADDING_DP * density;
+    }
+
+    /**
+     * Narrows a horizontal gesture band {@code [left,right]} symmetrically around
+     * its own center down to the hint-bar band. Mutates {@code ltrb} in place.
+     *
+     * @param ltrb 4 floats {left, top, right, bottom}; only indices 0 and 2 change.
+     * @return {@code true} when the band could be narrowed to at least 2px (caller
+     *         should apply it), {@code false} when the result is degenerate (caller
+     *         must leave the region untouched so gestures are never lost).
+     */
+    public static boolean narrowBandToBar(float[] ltrb, int barWidthDp, float density) {
+        float half = barHalfWidthPx(barWidthDp, density);
+        float center = (ltrb[0] + ltrb[2]) / 2f;
+        float left = Math.max(ltrb[0], center - half);
+        float right = Math.min(ltrb[2], center + half);
+        if (right - left < 2f) return false;
+        ltrb[0] = left;
+        ltrb[2] = right;
+        return true;
     }
 }

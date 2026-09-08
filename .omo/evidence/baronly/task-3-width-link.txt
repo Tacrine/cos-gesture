@@ -1,0 +1,43 @@
+
+
+=== UPDATE 2026-09-08 (session continuation, blocked on device) ===
+STAGE: task-3 width linkage partial + ROOT-CAUSE fix of module not loading.
+
+[width-40 live data, recorded earlier]
+- x=500 (in-band @40) => PASS, no veto
+- x=700 (off-band @40) => VETO barOnly down true (gesture still completes END=True -> task-5 failure-B)
+
+[this session actions]
+1. UI slider interacted: mid drag 540->700 set preview to 117dp (SeekBar live).
+2. Slider to 160dp preview. custom-length Button below fold; scroll revealed. UI taps mis-targeted
+   (focus jumped to Settings, app navigated away, shade overlay). UI path unreliable.
+3. Direct prefs write via root (am force-stop; run-as cp gc.xml gesture_config.xml):
+   master=1 left=1 right=1 mback=0 bar_width_dp=160 bar_only=1 version=1
+   provider confirmed: barWidthDp=160, barOnly=1. NOTE UTF-8 BOM corrupts prefs: write UTF8 no BOM.
+
+[ROOT CAUSE - module silently not loading into SystemUI]
+- After pkill com.android.systemui module produced ZERO logs (no CONFIG_UPDATE/PASS/VETO) though
+  it logged earlier today. SystemUI gesture code (SystemUi--NavBar) ran fine.
+- LSPosed db /data/adb/lspd/config/modules_config.db:
+    modules:       com.cos.lspit.gesture apk_path=OLD (~~tnRutTiKMUBEPJloQoAiOA==/...-5CffbsdRIY0LiG6ZxpHgvw==)
+    modules_state: (com.cos.lspit.gesture,0,enabled=0)    <-- DISABLED
+    scope:         (com.cos.lspit.gesture, com.android.systemui, 0)
+- Cause: app reinstalled via adb install -> /data/app path changed (now
+  ~~Kg8ihKYOs_qoXfikFG0BRQ==/com.cos.lspit.gesture-hLU1nQe-43CpK8bLKnkbeQ==/base.apk).
+  LSPosed kept old path, marked module disabled. Old hooked SystemUI kept logging until killed.
+- FIX APPLIED (root): UPDATE modules_state SET enabled=1; UPDATE modules SET apk_path=current.
+  Replaced live db after kill lspd + rm wal/shm. Backup: modules_config.db.bak. Rebooted device.
+
+[UNEXPECTED CONSEQUENCE]
+- Reboot killed wireless adb session (10.168.1.123:46083). Wireless debugging does not persist
+  across reboot on this ColorOS build. Device unreachable (connect 10060, mdns empty, 5555 refused).
+  NEED USER: re-enable ?????->???? + new pairing code, or USB.
+
+[device state left]
+- App prefs width=160, mback=0, barOnly=1, master/left/right=1.
+- Lockscreen NOT modified (set-disabled reverted itself; original secure lock intact).
+- Module enabled in LSPosed (effective next SystemUI start / boot).
+
+[blocked-until-reconnect assertions]
+- Width-160 live gate test: x=700 in-band@160 expect PASS; x=800 off-band@160 expect VETO.
+- Reconnect + unlock, confirm CONFIG_UPDATE barWidthDp=160, resume task-3 evidence.

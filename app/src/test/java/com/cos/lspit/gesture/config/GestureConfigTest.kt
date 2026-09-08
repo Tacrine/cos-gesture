@@ -17,7 +17,7 @@ import org.junit.Test
  * actively takes over Back/Home injection and must never enable by accident.
  *
  * barWidthDp is nullable and only binds within the accepted width range
- * (80-120); null means "leave the system hint-bar width untouched".
+ * (40-160); null means "leave the system hint-bar width untouched".
  */
 class GestureConfigTest {
 
@@ -27,8 +27,9 @@ class GestureConfigTest {
         right: Int? = 1,
         mback: Int? = 0,
         barWidth: Int? = null,
+        barOnly: Int? = 0,
         version: Int? = 2,
-    ) = GestureConfig.fromValues(master, left, right, mback, barWidth, version)
+        ) = GestureConfig.fromValues(master, left, right, mback, barWidth, barOnly, null, null, version)
 
     // --- veto switches (fail-open, unchanged) ---
 
@@ -92,6 +93,54 @@ class GestureConfigTest {
         assertFalse(config.mbackEnabled)
     }
 
+    // --- barOnly (fail-closed) ---
+
+    @Test
+    fun barOnlyOnParsesOn_whenExplicit1() {
+        val config = v(1, 1, 1, 0, null, 1)
+        assertTrue(config.barOnlyEnabled)
+    }
+
+    @Test
+    fun barOnlyOff_whenExplicit0() {
+        val config = v(1, 1, 1, 0, null, 0)
+        assertFalse(config.barOnlyEnabled)
+    }
+
+    @Test
+    fun barOnlyDisabled_whenColumnMissing() {
+        val config = v(1, 1, 1, 0, null, null)
+        assertFalse(config.barOnlyEnabled)
+    }
+
+    // --- hintTapShield (fail-closed) ---
+
+    @Test
+    fun hintTapShieldOnParsesOn_whenExplicit1() {
+            val config = GestureConfig.fromValues(1, 1, 1, 0, null, 0, 1, null, 4)
+        assertTrue(config.hintTapShieldEnabled)
+    }
+
+    @Test
+    fun hintTapShieldOff_whenColumnMissingOrZero() {
+            assertFalse(GestureConfig.fromValues(1, 1, 1, 0, null, 0, null, null, 4).hintTapShieldEnabled)
+            assertFalse(GestureConfig.fromValues(1, 1, 1, 0, null, 0, 0, null, 4).hintTapShieldEnabled)
+    }
+
+        // --- barHidden (fail-closed) ---
+
+        @Test
+        fun barHiddenOnParsesOn_whenExplicit1() {
+            val config = GestureConfig.fromValues(1, 1, 1, 0, null, 0, 0, 1, 4)
+            assertTrue(config.barHiddenEnabled)
+        }
+
+        @Test
+        fun barHiddenOff_whenColumnMissingOrZero() {
+            assertFalse(GestureConfig.fromValues(1, 1, 1, 0, null, 0, 0, null, 4).barHiddenEnabled)
+            assertFalse(GestureConfig.fromValues(1, 1, 1, 0, null, 0, 0, 0, 4).barHiddenEnabled)
+        }
+
     // --- barWidthDp (fail-closed to null / untouched) ---
 
     @Test
@@ -108,18 +157,18 @@ class GestureConfigTest {
 
     @Test
     fun barWidthNull_whenBelowRange() {
-        assertNull(v(1, 1, 1, 0, 79, 2).barWidthDp)
+        assertNull(v(1, 1, 1, 0, 39, 2).barWidthDp)
     }
 
     @Test
     fun barWidthNull_whenAboveRange() {
-        assertNull(v(1, 1, 1, 0, 121, 2).barWidthDp)
+        assertNull(v(1, 1, 1, 0, 161, 2).barWidthDp)
     }
 
     @Test
     fun barWidthBoundary_inRange() {
-        assertEquals(80, v(1, 1, 1, 0, 80, 2).barWidthDp)
-        assertEquals(120, v(1, 1, 1, 0, 120, 2).barWidthDp)
+        assertEquals(40, v(1, 1, 1, 0, 40, 2).barWidthDp)
+        assertEquals(160, v(1, 1, 1, 0, 160, 2).barWidthDp)
     }
 
     // --- defaults ---
@@ -132,7 +181,7 @@ class GestureConfigTest {
         assertTrue(config.rightEnabled)
         assertFalse(config.mbackEnabled)
         assertNull(config.barWidthDp)
-        assertEquals(2, config.version)
+        assertEquals(4, config.version)
     }
 
     // --- legacy compatibility ---
@@ -146,7 +195,7 @@ class GestureConfigTest {
             // Simulate reading just those four (version cell = 1); the new mback
             // and barWidthDp cells decode as null via their readNullableColumn
             // paths, leaving the new features safely off/untouched.
-            val config = GestureConfig.fromValues(1, 1, 1, null, null, 1)
+            val config = GestureConfig.fromValues(1, 1, 1, null, null, null, null, null, 1)
             assertTrue(config.masterEnabled)
             assertTrue(config.leftEnabled)
             assertTrue(config.rightEnabled)

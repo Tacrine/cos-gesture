@@ -106,6 +106,12 @@ public final class SideBackHooker {
                                 + " toolType=" + event.getToolType(0));
                         return null; // skip original onMotionEventImpl -> no side Back
                     }
+                    if (shouldVetoBarOnly(event)) {
+                        log(module, 4, "VETO barOnly down x=" + Math.round(event.getX(0))
+                                + " y=" + Math.round(event.getY(0))
+                                + " barOnly=" + GestureConfigClient.isBarOnlyEnabled());
+                        return null; // skip original -> no bottom Home/Recents off the bar
+                    }
                     log(module, 4, "PASS down x=" + event.getX(0) + " y=" + event.getY(0));
                 }
                 // Non-DOWN events pass through silently (no per-move log flood).
@@ -141,6 +147,29 @@ public final class SideBackHooker {
                 height,
                 vetoLeft,
                 vetoRight);
+    }
+
+    /** Bar-only gate: veto a bottom-strip DOWN that started off the hint bar. */
+    private static boolean shouldVetoBarOnly(MotionEvent event) {
+        try {
+            DisplayMetrics metrics = Resources.getSystem().getDisplayMetrics();
+            Integer dp = GestureConfigClient.getBarWidthDp();
+            int barDp = dp == null ? SideGesturePolicy.DEFAULT_BAR_DP : dp;
+            return SideGesturePolicy.shouldVetoBarOnly(
+                    event.getActionMasked(),
+                    event.getSource(),
+                    event.getToolType(0),
+                    event.getX(0),
+                    event.getY(0),
+                    metrics.widthPixels,
+                    metrics.heightPixels,
+                    GestureConfigClient.isMasterEnabled()
+                            && GestureConfigClient.isBarOnlyEnabled(),
+                    barDp,
+                    metrics.density);
+        } catch (Throwable ignored) {
+            return false; // cannot bound the display -> never drop an event blindly
+        }
     }
 
     private static void log(XposedModule module, int priority, String message) {

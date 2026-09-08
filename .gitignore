@@ -30,3 +30,6 @@ captures/
 .omo/drafts/
 .omo/evidence/omo-port-vscode-copilot/
 .kotlin/
+
+# Reverse-engineering / decompile dumps (large text artifacts, never commit)
+apk_extract/
