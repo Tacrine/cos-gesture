@@ -16,6 +16,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -220,11 +221,14 @@ fun GestureSettingsScreen() {
                         Slider(
                             value = barWidthOverride.toFloat(),
                             onValueChange = { value ->
-                                val clamped = value.roundToInt().coerceIn(40, 160)
+                                val clamped = value.roundToInt().coerceIn(
+                                    GestureConfig.BAR_WIDTH_MIN_DP,
+                                    GestureConfig.BAR_WIDTH_MAX_DP
+                                )
                                 barWidthOverride = clamped
                             },
-                            valueRange = 40f..160f,
-                            steps = 119,
+                            valueRange = GestureConfig.BAR_WIDTH_MIN_DP.toFloat()..GestureConfig.BAR_WIDTH_MAX_DP.toFloat(),
+                            steps = GestureConfig.BAR_WIDTH_MAX_DP - GestureConfig.BAR_WIDTH_MIN_DP - 1,
                             enabled = true
                         )
 
@@ -246,8 +250,10 @@ fun GestureSettingsScreen() {
     }
 
     snackbarMessage?.let { message ->
-        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-        snackbarMessage = null
+        LaunchedEffect(message) {
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            snackbarMessage = null
+        }
     }
 
     if (showConfirm) {
@@ -263,7 +269,7 @@ fun GestureSettingsScreen() {
                         snackbarMessage = when (result) {
                             RestartResult.Success -> context.getString(R.string.restart_result_ok)
                             RestartResult.Manual -> context.getString(R.string.restart_result_manual)
-                            is RestartResult.Failure -> context.getString(R.string.restart_result_manual, result.reason)
+                            is RestartResult.Failure -> context.getString(R.string.restart_result_manual_reason, result.reason)
                         }
                     }
                 }) {
