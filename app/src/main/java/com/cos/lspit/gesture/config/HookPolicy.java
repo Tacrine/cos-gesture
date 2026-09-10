@@ -7,7 +7,7 @@ import java.lang.reflect.Method;
  *
  * <p>The only proven gate for suppressing gesture Back on this firmware is an
  * around/before hook on {@code SideGestureDetector#onMotionEventImpl(MotionEvent)V}
- * inside {@code com.android.systemui} (see {@code discovery.json} outcome MATCH).
+ * inside {@code com.android.systemui} (see {@code discovery.json} result MATCH).
  * The hook is activated ONLY when every guard below passes:
  * {@link #ENABLED}, a live SystemUI APK whose SHA-256 equals
  * {@link #EXPECTED_SYSTEMUI_SHA256}, and an exact target class/method/descriptor
@@ -30,26 +30,6 @@ public final class HookPolicy {
             "7144D7E0E7DA46BC5F408C71C7B8D761DF97EE1C6B52F99FA2F40577183B71B8";
 
     private HookPolicy() {}
-
-    /**
-     * Full fail-closed outcome decision.
-     *
-     * @param enabled {@link #ENABLED}
-     * @param hashOk live SystemUI APK SHA-256 == {@link #EXPECTED_SYSTEMUI_SHA256}
-     * @param classFound declaring class resolvable in the target classloader
-     * @param methodFound {@link #TARGET_METHOD} present with the expected parameter type
-     * @param descriptorOk resolved method's full descriptor == {@link #TARGET_DESCRIPTOR}
-     *        (this is the DESCRIPTOR_MATCH concept: a wrong parameter list or a wrong
-     *        return type — e.g. the old AOSP {@code isWithinTouchRegion} returning
-     *        {@code Z} instead of {@code V} — must yield {@code NO_MATCH}, never a hook)
-     */
-    public static String outcome(boolean enabled, boolean hashOk, boolean classFound,
-            boolean methodFound, boolean descriptorOk) {
-        if (!enabled) return "HOOK_DISABLED";
-        if (!hashOk) return "HASH_MISMATCH";
-        if (!classFound || !methodFound || !descriptorOk) return "NO_MATCH";
-        return "HOOK_REGISTERED";
-    }
 
     /**
      * DESCRIPTOR_MATCH check: builds the JVM descriptor for a resolved reflective method

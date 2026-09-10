@@ -20,37 +20,6 @@ public class HookPolicyTest {
     }
 
     @Test
-    public void disabledYieldsHookDisabled() {
-        assertEquals("HOOK_DISABLED", HookPolicy.outcome(false, true, true, true, true));
-    }
-
-    @Test
-    public void hashMismatchYieldsHashMismatch() {
-        assertEquals("HASH_MISMATCH", HookPolicy.outcome(true, false, true, true, true));
-    }
-
-    @Test
-    public void classMissingYieldsNoMatch() {
-        assertEquals("NO_MATCH", HookPolicy.outcome(true, true, false, true, true));
-    }
-
-    @Test
-    public void methodMissingYieldsNoMatch() {
-        assertEquals("NO_MATCH", HookPolicy.outcome(true, true, true, false, true));
-    }
-
-    @Test
-    public void descriptorMismatchYieldsNoMatch() {
-        // DESCRIPTOR_MATCH gate: a wrong descriptor/return type must fail closed.
-        assertEquals("NO_MATCH", HookPolicy.outcome(true, true, true, true, false));
-    }
-
-    @Test
-    public void allGuardsPassYieldHookRegistered() {
-        assertEquals("HOOK_REGISTERED", HookPolicy.outcome(true, true, true, true, true));
-    }
-
-    @Test
     public void policyTargetsProvenOplusGate() {
         assertTrue(HookPolicy.ENABLED);
         assertEquals("com.oplus.systemui.navigationbar.gesture.sidegesture.SideGestureDetector",

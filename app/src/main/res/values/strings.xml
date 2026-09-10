@@ -8,7 +8,6 @@
     <string name="switch_mback">mBack 手势</string>
     <string name="switch_bar_visibility">显示手势提示条</string>
     <string name="label_bar_width">白条长度</string>
-    <string name="bar_width_follow_system">跟随系统</string>
     <string name="bar_width_custom">自定义长度</string>
     <string name="bar_width_value">%1$ddp</string>
         <string name="bar_visibility_helper">关闭后系统会隐藏小白条。若同时开启 mBack 或「仅白条触发」，模块会把系统真隐藏转换为仅不绘制像素——白条不显示但触发区域、点击、长按全部正常工作，应用内容也不会上移。若 mBack/仅白条触发都关闭，则按系统原行为隐藏（应用内容上移）。</string>
@@ -26,6 +25,5 @@
     <string name="dialog_restart_title">确认重启</string>
     <string name="dialog_restart_message">将结束 SystemUI 进程并由系统自动重启，屏幕状态栏/导航栏会短暂消失后恢复。继续？</string>
     <string name="restart_result_ok">已执行重启指令</string>
-    <string name="restart_result_manual_title">需要手动重启</string>
     <string name="restart_result_manual">未检测到 Root/Shizuku 权限。请重启手机，或在 LSP-IT 中重新启用模块。</string>
 </resources>

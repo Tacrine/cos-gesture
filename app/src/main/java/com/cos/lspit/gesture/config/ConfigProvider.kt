@@ -18,7 +18,6 @@ class ConfigProvider : ContentProvider() {
     companion object {
         const val AUTHORITY = "com.cos.lspit.gesture.config"
         val CONFIG_URI: Uri = Uri.parse("content://$AUTHORITY/config")
-        val STATUS_URI: Uri = Uri.parse("content://$AUTHORITY/status")
         val CONFIG_COLUMNS = arrayOf("master", "left", "right", "mback", "barWidthDp", "barOnly", "hintTapShield", "barHidden", "version")
         private const val STATUS_PREFS = "gesture_status"
     }

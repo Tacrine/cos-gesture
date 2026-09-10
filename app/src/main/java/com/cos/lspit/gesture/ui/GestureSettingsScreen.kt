@@ -2,6 +2,7 @@ package com.cos.lspit.gesture.ui
 
 import android.content.Context
 import android.widget.Toast
+import com.cos.lspit.gesture.config.GestureConfig
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -50,7 +51,7 @@ fun GestureSettingsScreen() {
     var showConfirm by remember { mutableStateOf(false) }
     var snackbarMessage by remember { mutableStateOf<String?>(null) }
     var gestureBarVisible by remember { mutableStateOf(SystemGestureBarSettings.isHintBarVisible(context)) }
-    var barWidthOverride by remember { mutableStateOf(config.barWidthDp ?: 100) }
+    var barWidthOverride by remember { mutableStateOf(config.barWidthDp ?: GestureConfig.BAR_WIDTH_DEFAULT_DP) }
 
     val scope = rememberCoroutineScope()
 
