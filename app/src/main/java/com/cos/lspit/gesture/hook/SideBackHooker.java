@@ -28,6 +28,14 @@ import java.security.MessageDigest;
 public final class SideBackHooker {
     private static final String TAG = "COS16-Gesture";
 
+    /**
+     * Set once the background hash check has confirmed the expected SystemUI
+     * build. Until then the interceptor passes every event straight through
+     * to the original method (fail-closed), mirroring the volatile gate
+     * pattern of {@code NavigationHandleHooks.SystemHide.sConvertedHideActive}.
+     */
+    private static volatile boolean hashVerified;
+
     private SideBackHooker() {}
 
     public static void onPackageLoaded(XposedModule module, PackageLoadedParam param) {
@@ -66,14 +74,25 @@ public final class SideBackHooker {
                 GestureConfigClient.reportStatus(module, "NO_MATCH", "descriptor-mismatch");
                 return;
             }
+            // Register first, verify second: hashing a multi-hundred-MB APK
+            // inline would stall the SystemUI main thread at startup. The
+            // interceptor stays a pure passthrough until the background
+            // check below flips hashVerified.
             module.hook(method)
                     .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                     .intercept(chain -> handle(chain, module));
-            log(module, 4, "HOOK_REGISTERED " + HookPolicy.TARGET_CLASS + "#"
+            log(module, 4, "HOOK_PENDING_VERIFY " + HookPolicy.TARGET_CLASS + "#"
                     + HookPolicy.TARGET_METHOD + HookPolicy.TARGET_DESCRIPTOR);
-            GestureConfigClient.init();
-            GestureConfigClient.reportStatus(module, "HOOK_REGISTERED",
+            GestureConfigClient.reportStatus(module, "HOOK_PENDING_VERIFY",
                     HookPolicy.TARGET_CLASS + "#" + HookPolicy.TARGET_METHOD);
+            Thread verifier = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    verifyHash(module, param);
+                }
+            }, "cos16-sideback-verify");
+            verifier.setDaemon(true);
+            verifier.start();
         } catch (Throwable failure) {
             try {
                 module.log(6, TAG, "HOOK_DISABLED", failure);
@@ -84,12 +103,44 @@ public final class SideBackHooker {
     }
 
     /**
+     * Background hash verification. Any failure keeps {@code hashVerified}
+     * false, which means a permanent passthrough (fail-closed). Config init
+     * and the HOOK_REGISTERED report live in the success branch only: on an
+     * unverified ROM the fail-closed config defaults must stay armed, per
+     * the "never act on an unproven build" contract in HookPolicy.
+     */
+    private static void verifyHash(XposedModule module, PackageLoadedParam param) {
+        try {
+            if (!hashMatches(param)) {
+                log(module, 4, "HASH_MISMATCH");
+                GestureConfigClient.reportStatus(module, "HASH_MISMATCH", "systemui-sha256");
+                return;
+            }
+            hashVerified = true;
+            log(module, 4, "HOOK_REGISTERED " + HookPolicy.TARGET_CLASS + "#"
+                    + HookPolicy.TARGET_METHOD + HookPolicy.TARGET_DESCRIPTOR);
+            GestureConfigClient.init();
+            GestureConfigClient.reportStatus(module, "HOOK_REGISTERED",
+                    HookPolicy.TARGET_CLASS + "#" + HookPolicy.TARGET_METHOD);
+        } catch (Throwable failure) {
+            log(module, 6, "HASH_VERIFY_FAILED", failure);
+            GestureConfigClient.reportStatus(module, "HASH_VERIFY_FAILED", "verify-thread");
+        }
+    }
+
+    /**
      * Interceptor body. A veto skips the original method by returning its void value
      * ({@code null}) without calling {@code chain.proceed()}; every other event is
      * forwarded unchanged via {@code chain.proceed()}.
      */
     private static Object handle(io.github.libxposed.api.XposedInterface.Chain chain,
             XposedModule module) throws Throwable {
+        if (!hashVerified) {
+            // Unverified build: never veto and never skip - a return without
+            // chain.proceed() would silently drop the original method and kill
+            // side Back entirely.
+            return chain.proceed();
+        }
         Object argument = null;
         try {
             argument = chain.getArg(0);
