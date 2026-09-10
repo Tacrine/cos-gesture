@@ -4,6 +4,7 @@ import android.content.Context
 import android.widget.Toast
 import com.cos.lspit.gesture.config.GestureConfig
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -51,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import com.cos.lspit.gesture.R
 import com.cos.lspit.gesture.config.ConfigStore
 import com.cos.lspit.gesture.config.SystemGestureBarSettings
+import com.cos.lspit.gesture.config.UIPreferences.ThemeMode
 import com.cos.lspit.gesture.restart.RestartResult
 import com.cos.lspit.gesture.restart.ScopeRestarter
 import java.text.SimpleDateFormat
@@ -72,7 +74,10 @@ fun GestureSettingsScreen() {
     var config by remember { mutableStateOf(ConfigStore.load(context)) }
     var statusLine by remember { mutableStateOf(readStatusLine(context)) }
     var showConfirm by remember { mutableStateOf(false) }
-    var snackbarMessage by remember { mutableStateOf<String?>(null) }
+        var showThemeDialog by remember { mutableStateOf(false) }
+        val themeModeCurrent = LocalThemeMode.current
+        val setThemeMode = LocalThemeModeSetter.current
+        var snackbarMessage by remember { mutableStateOf<String?>(null) }
     var gestureBarVisible by remember { mutableStateOf(SystemGestureBarSettings.isHintBarVisible(context)) }
     var barWidthOverride by remember { mutableStateOf(config.barWidthDp ?: GestureConfig.BAR_WIDTH_DEFAULT_DP) }
 
@@ -162,7 +167,40 @@ fun GestureSettingsScreen() {
             }
 
             item {
-                SmallTitle(stringResource(R.string.section_navigation))
+                                    SmallTitle(stringResource(R.string.section_appearance))
+                                    Card(modifier = Modifier.fillMaxWidth()) {
+                                        Column(Modifier.padding(16.dp)) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable { showThemeDialog = true }
+                                                    .padding(vertical = 4.dp)
+                                            ) {
+                                                MiuixText(
+                                                    text = stringResource(R.string.theme_mode_label),
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                MiuixText(
+                                                    text = when (themeModeCurrent) {
+                                                        ThemeMode.SYSTEM -> stringResource(R.string.theme_mode_system)
+                                                        ThemeMode.LIGHT -> stringResource(R.string.theme_mode_light)
+                                                        ThemeMode.DARK -> stringResource(R.string.theme_mode_dark)
+                                                    }
+                                                )
+                                                Spacer(Modifier.size(4.dp))
+                                                Icon(
+                                                    imageVector = Icons.Filled.KeyboardArrowRight,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                item {
+                                    SmallTitle(stringResource(R.string.section_navigation))
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
                         SwitchRow(
@@ -345,7 +383,51 @@ fun GestureSettingsScreen() {
             }
         )
     }
-}
+
+                if (showThemeDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showThemeDialog = false },
+                        title = { Text(stringResource(R.string.theme_mode_dialog_title)) },
+                        text = {
+                            Column {
+                                ThemeMode.entries.forEach { mode ->
+                                    val label = when (mode) {
+                                        ThemeMode.SYSTEM -> stringResource(R.string.theme_mode_system)
+                                        ThemeMode.LIGHT -> stringResource(R.string.theme_mode_light)
+                                        ThemeMode.DARK -> stringResource(R.string.theme_mode_dark)
+                                    }
+                                    ListItem(
+                                        headlineContent = { Text(label) },
+                                        leadingContent = {
+                                            if (mode == themeModeCurrent) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Check,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                            } else {
+                                                Spacer(Modifier.size(24.dp))
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                setThemeMode(mode)
+                                                showThemeDialog = false
+                                            }
+                                    )
+                                }
+                            }
+                        },
+                        confirmButton = {},
+                        dismissButton = {
+                            TextButton(onClick = { showThemeDialog = false }) {
+                                Text(stringResource(android.R.string.cancel))
+                            }
+                        }
+                    )
+                }
+            }
 
 @Composable
 private fun SwitchRow(
