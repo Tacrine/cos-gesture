@@ -51,6 +51,15 @@ public final class LauncherRegionHooker {
     private static final long REFRESH_DEBOUNCE_MS = 400L;
 
     private static ClassLoader moduleClassLoader;
+    /**
+     * Shared main-looper handler. Must be a single instance: removeCallbacks
+     * only cancels callbacks queued on the same handler, so a fresh Handler
+     * per call silently broke the debounce.
+     */
+    private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
+    /** Cached singleton handles for the launcher region refresh; valid for the process lifetime. */
+    private static volatile Field sInstanceField;
+    private static volatile Method sRefreshMethod;
     private static final Runnable REGION_REFRESH = new Runnable() {
         @Override
         public void run() {
@@ -142,9 +151,8 @@ public final class LauncherRegionHooker {
     /** Debounced re-registration trigger: launcher recomputes + re-registers the region. */
     private static void scheduleRegionRefresh() {
         try {
-            Handler handler = new Handler(Looper.getMainLooper());
-            handler.removeCallbacks(REGION_REFRESH);
-            handler.postDelayed(REGION_REFRESH, REFRESH_DEBOUNCE_MS);
+            MAIN_HANDLER.removeCallbacks(REGION_REFRESH);
+            MAIN_HANDLER.postDelayed(REGION_REFRESH, REFRESH_DEBOUNCE_MS);
         } catch (Throwable failure) {
             Log.w(TAG, "REFRESH_SCHEDULE_FAILED " + failure);
         }
@@ -153,11 +161,17 @@ public final class LauncherRegionHooker {
     private static void refreshLauncherRegion() {
         try {
             if (moduleClassLoader == null) return;
-            Class<?> controller = Class.forName(NAV_CONTROLLER, false, moduleClassLoader);
-            Field instanceField = controller.getField("INSTANCE");
+            Field instanceField = sInstanceField;
+            Method refresh = sRefreshMethod;
+            if (instanceField == null || refresh == null) {
+                Class<?> controller = Class.forName(NAV_CONTROLLER, false, moduleClassLoader);
+                instanceField = controller.getField("INSTANCE");
+                refresh = controller.getDeclaredMethod(NAV_REFRESH_METHOD);
+                refresh.setAccessible(true);
+                sInstanceField = instanceField;
+                sRefreshMethod = refresh;
+            }
             Object singleton = instanceField.get(null);
-            Method refresh = controller.getDeclaredMethod(NAV_REFRESH_METHOD);
-            refresh.setAccessible(true);
             refresh.invoke(singleton);
             Log.i(TAG, "REGION_REFRESH invoked " + NAV_CONTROLLER + "#" + NAV_REFRESH_METHOD);
         } catch (Throwable failure) {
