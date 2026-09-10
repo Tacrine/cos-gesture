@@ -27,4 +27,12 @@
     <string name="restart_result_ok">已执行重启指令</string>
     <string name="restart_result_manual">未检测到 Root/Shizuku 权限。请重启手机，或在 LSP-IT 中重新启用模块。</string>
     <string name="restart_result_manual_reason">自动重启失败（%1$s）。请重启手机，或在 LSP-IT 中重新启用模块。</string>
-</resources>
+        <string name="section_appearance">外观</string>
+        <string name="theme_mode_label">深色模式</string>
+        <string name="theme_mode_dialog_title">深色模式</string>
+        <string name="theme_mode_system">跟随系统</string>
+        <string name="theme_mode_light">浅色</string>
+        <string name="theme_mode_dark">深色</string>
+        <string name="section_switches">开关设置</string>
+        <string name="bar_width_save">保存长度</string>
+    </resources>
