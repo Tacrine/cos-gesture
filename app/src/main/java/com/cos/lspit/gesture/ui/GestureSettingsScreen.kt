@@ -3,15 +3,35 @@ package com.cos.lspit.gesture.ui
 import android.content.Context
 import android.widget.Toast
 import com.cos.lspit.gesture.config.GestureConfig
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -24,6 +44,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -39,6 +60,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.TopAppBar
@@ -63,22 +85,38 @@ fun GestureSettingsScreen() {
                 SmallTitle(stringResource(R.string.section_scope))
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
-                        MiuixText(
-                            text = stringResource(R.string.status_label),
-                            style = androidx.compose.material3.MaterialTheme.typography.titleSmall
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        MiuixText(
-                            text = statusLine,
-                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        Button(onClick = { showConfirm = true }) {
-                            MiuixText(stringResource(R.string.btn_restart))
-                        }
-                    }
-                }
-            }
+                                        val (statusIcon, statusColor) = statusStyle(statusLine)
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = statusIcon,
+                                                contentDescription = null,
+                                                tint = statusColor,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            Spacer(Modifier.size(6.dp))
+                                            MiuixText(
+                                                text = stringResource(R.string.status_label),
+                                                style = androidx.compose.material3.MaterialTheme.typography.titleSmall
+                                            )
+                                        }
+                                        Spacer(Modifier.height(4.dp))
+                                        MiuixText(
+                                            text = statusLine,
+                                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium
+                                        )
+                                        Spacer(Modifier.height(12.dp))
+                                        Button(onClick = { showConfirm = true }) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Refresh,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(Modifier.size(6.dp))
+                                            MiuixText(stringResource(R.string.btn_restart))
+                                        }
+                                    }
+                                }
+                            }
 
             item {
                 SmallTitle(stringResource(R.string.settings_title))
@@ -86,33 +124,36 @@ fun GestureSettingsScreen() {
                     Column(Modifier.padding(16.dp)) {
                         SwitchRow(
                             label = stringResource(R.string.switch_master),
-                            checked = config.masterEnabled,
-                            enabled = true,
-                            onCheckedChange = { on ->
-                                config = config.copy(masterEnabled = on)
-                                ConfigStore.save(context, config)
-                            }
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        SwitchRow(
-                            label = stringResource(R.string.switch_left),
-                            checked = config.masterEnabled && config.leftEnabled,
-                            enabled = config.masterEnabled,
-                            onCheckedChange = { on ->
-                                config = config.copy(leftEnabled = on)
-                                ConfigStore.save(context, config)
-                            }
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        SwitchRow(
-                            label = stringResource(R.string.switch_right),
-                            checked = config.masterEnabled && config.rightEnabled,
-                            enabled = config.masterEnabled,
-                            onCheckedChange = { on ->
-                                config = config.copy(rightEnabled = on)
-                                ConfigStore.save(context, config)
-                            }
-                        )
+                                                    icon = Icons.Filled.Settings,
+                                                    checked = config.masterEnabled,
+                                                    enabled = true,
+                                                    onCheckedChange = { on ->
+                                                        config = config.copy(masterEnabled = on)
+                                                        ConfigStore.save(context, config)
+                                                    }
+                                                )
+                                                Spacer(Modifier.height(8.dp))
+                                                SwitchRow(
+                                                    label = stringResource(R.string.switch_left),
+                                                    icon = Icons.Filled.ArrowBack,
+                                                    checked = config.masterEnabled && config.leftEnabled,
+                                                    enabled = config.masterEnabled,
+                                                    onCheckedChange = { on ->
+                                                        config = config.copy(leftEnabled = on)
+                                                        ConfigStore.save(context, config)
+                                                    }
+                                                )
+                                                Spacer(Modifier.height(8.dp))
+                                                SwitchRow(
+                                                    label = stringResource(R.string.switch_right),
+                                                    icon = Icons.Filled.ArrowForward,
+                                                    checked = config.masterEnabled && config.rightEnabled,
+                                                    enabled = config.masterEnabled,
+                                                    onCheckedChange = { on ->
+                                                        config = config.copy(rightEnabled = on)
+                                                        ConfigStore.save(context, config)
+                                                    }
+                                                )
                     }
                 }
             }
@@ -123,76 +164,81 @@ fun GestureSettingsScreen() {
                     Column(Modifier.padding(16.dp)) {
                         SwitchRow(
                             label = stringResource(R.string.switch_bar_visibility),
-                            checked = gestureBarVisible,
-                            enabled = !config.mbackEnabled && !config.barOnlyEnabled,
-                                                        onCheckedChange = { on ->
-                                                            gestureBarVisible = on
-                                                            SystemGestureBarSettings.setHintBarVisible(context, on)
-                                                        }
-                                                    )
-                                                    if (!gestureBarVisible) {
-                                                            Spacer(Modifier.height(4.dp))
-                                                            MiuixText(
-                                                                text = stringResource(R.string.bar_visibility_helper),
-                                                                style = androidx.compose.material3.MaterialTheme.typography.bodySmall
-                                                            )
-                                                    }
-                                                    Spacer(Modifier.height(8.dp))
-                                                    SwitchRow(
-                                                        label = stringResource(R.string.switch_mback),
-                                                        checked = config.mbackEnabled,
-                                                        enabled = true,
-                                                        onCheckedChange = { on ->
-                                                            config = config.copy(mbackEnabled = on)
-                                                            ConfigStore.save(context, config)
-                                                        }
-                                                    )
+                                        icon = Icons.Filled.Star,
+                                        checked = gestureBarVisible,
+                                        enabled = !config.mbackEnabled && !config.barOnlyEnabled,
+                                        onCheckedChange = { on ->
+                                            gestureBarVisible = on
+                                            SystemGestureBarSettings.setHintBarVisible(context, on)
+                                        }
+                                    )
+                                    if (!gestureBarVisible) {
+                                        Spacer(Modifier.height(4.dp))
+                                        MiuixText(
+                                            text = stringResource(R.string.bar_visibility_helper),
+                                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                    Spacer(Modifier.height(12.dp))
+                                    SwitchRow(
+                                        label = stringResource(R.string.switch_mback),
+                                        icon = Icons.Filled.KeyboardArrowLeft,
+                                        checked = config.mbackEnabled,
+                                        enabled = true,
+                                        onCheckedChange = { on ->
+                                            config = config.copy(mbackEnabled = on)
+                                            ConfigStore.save(context, config)
+                                        }
+                                    )
 
-                                                    if (config.mbackEnabled) {
-                                                        Spacer(Modifier.height(8.dp))
-                                                        MiuixText(
-                                                            text = stringResource(R.string.mback_requires_bar),
-                                                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall
-                                                        )
-                                                    }
+                                    if (config.mbackEnabled) {
+                                        Spacer(Modifier.height(4.dp))
+                                        MiuixText(
+                                            text = stringResource(R.string.mback_requires_bar),
+                                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall
+                                        )
+                                    }
 
-                                                    Spacer(Modifier.height(8.dp))
-                                                    SwitchRow(
-                                                        label = stringResource(R.string.switch_bar_only),
-                                                        checked = config.barOnlyEnabled,
-                                                        enabled = true,
-                                                        onCheckedChange = { on ->
-                                                            config = config.copy(barOnlyEnabled = on)
-                                                            ConfigStore.save(context, config)
-                                                        }
-                                                    )
-                                                    if (config.barOnlyEnabled) {
-                                                        Spacer(Modifier.height(8.dp))
-                                                        MiuixText(
-                                                            text = stringResource(R.string.bar_only_helper),
-                                                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall
-                                                        )
-                                                    }
-                                                    Spacer(Modifier.height(8.dp))
-                                                    SwitchRow(
-                                                        label = stringResource(R.string.switch_tapshield),
-                                                        checked = config.hintTapShieldEnabled,
-                                                        enabled = true,
-                                                        onCheckedChange = { on ->
-                                                            config = config.copy(hintTapShieldEnabled = on)
-                                                            ConfigStore.save(context, config)
-                                                        }
-                                                    )
-                                                    Spacer(Modifier.height(8.dp))
-                                                    SwitchRow(
-                                                        label = stringResource(R.string.switch_hide_bar),
-                                                        checked = config.barHiddenEnabled,
-                                                        enabled = true,
-                                                        onCheckedChange = { on ->
-                                                            config = config.copy(barHiddenEnabled = on)
-                                                            ConfigStore.save(context, config)
-                                                        }
-                                                    )
+                                    Spacer(Modifier.height(12.dp))
+                                    SwitchRow(
+                                        label = stringResource(R.string.switch_bar_only),
+                                        icon = Icons.Filled.Place,
+                                        checked = config.barOnlyEnabled,
+                                        enabled = true,
+                                        onCheckedChange = { on ->
+                                            config = config.copy(barOnlyEnabled = on)
+                                            ConfigStore.save(context, config)
+                                        }
+                                    )
+                                    if (config.barOnlyEnabled) {
+                                        Spacer(Modifier.height(4.dp))
+                                        MiuixText(
+                                            text = stringResource(R.string.bar_only_helper),
+                                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                    Spacer(Modifier.height(12.dp))
+                                    SwitchRow(
+                                        label = stringResource(R.string.switch_tapshield),
+                                        icon = Icons.Filled.Lock,
+                                        checked = config.hintTapShieldEnabled,
+                                        enabled = true,
+                                        onCheckedChange = { on ->
+                                            config = config.copy(hintTapShieldEnabled = on)
+                                            ConfigStore.save(context, config)
+                                        }
+                                    )
+                                    Spacer(Modifier.height(12.dp))
+                                    SwitchRow(
+                                        label = stringResource(R.string.switch_hide_bar),
+                                        icon = Icons.Filled.Close,
+                                        checked = config.barHiddenEnabled,
+                                        enabled = true,
+                                        onCheckedChange = { on ->
+                                            config = config.copy(barHiddenEnabled = on)
+                                            ConfigStore.save(context, config)
+                                        }
+                                    )
                                                     if (config.barHiddenEnabled) {
                                                         Spacer(Modifier.height(8.dp))
                                                         MiuixText(
@@ -241,7 +287,13 @@ fun GestureSettingsScreen() {
                             },
                             enabled = true
                         ) {
-                            MiuixText(stringResource(R.string.bar_width_custom))
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Check,
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                    Spacer(Modifier.size(6.dp))
+                                                    MiuixText(stringResource(R.string.bar_width_save))
                         }
                     }
                 }
@@ -288,6 +340,7 @@ fun GestureSettingsScreen() {
 @Composable
 private fun SwitchRow(
     label: String,
+    icon: ImageVector,
     checked: Boolean,
     enabled: Boolean,
     onCheckedChange: (Boolean) -> Unit
@@ -296,6 +349,8 @@ private fun SwitchRow(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth()
     ) {
+        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.size(8.dp))
         MiuixText(
             text = label,
             modifier = Modifier.weight(1f),
@@ -316,4 +371,17 @@ private fun readStatusLine(context: Context): String {
     }
     val detail = prefs.getString("detail", "")
     return "$outcome $detail $time".trim()
+}
+
+@Composable
+private fun statusStyle(statusLine: String): Pair<ImageVector, androidx.compose.ui.graphics.Color> {
+    val outcome = statusLine.substringBefore(' ').uppercase()
+    val scheme = MaterialTheme.colorScheme
+    return when (outcome) {
+        "HOOK_REGISTERED" -> Icons.Filled.CheckCircle to scheme.primary
+        "NO_MATCH",
+        "HASH_MISMATCH",
+        "HASH_VERIFY_FAILED" -> Icons.Filled.Warning to scheme.error
+        else -> Icons.Filled.Info to scheme.onSurfaceVariant
+    }
 }
