@@ -35,4 +35,5 @@
         <string name="theme_mode_dark">深色</string>
         <string name="section_switches">开关设置</string>
         <string name="bar_width_save">保存长度</string>
+        <string name="section_bar_detail">提示条细节</string>
     </resources>
