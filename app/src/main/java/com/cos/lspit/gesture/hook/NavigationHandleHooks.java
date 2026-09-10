@@ -75,7 +75,6 @@ public final class NavigationHandleHooks {
     private static volatile boolean sSecureObserverLive;
 
     private static volatile XposedModule sModule;
-    private static volatile View sLiveHandle;
     private static volatile boolean sObserverAdded;
     private static volatile boolean sListenerAdded;
     /** All live handles; appearance is re-applied to every instance, not just the last. */
@@ -242,7 +241,6 @@ public final class NavigationHandleHooks {
                         Object thiz = chain.getThisObject();
                         if (thiz instanceof View) {
                             View v = (View) thiz;
-                            sLiveHandle = v;
                             synchronized (sHandles) {
                                 sHandles.add(v);
                             }
@@ -305,7 +303,6 @@ public final class NavigationHandleHooks {
                         Object thiz = chain.getThisObject();
                         if (thiz instanceof View) {
                             View v = (View) thiz;
-                            if (thiz == sLiveHandle) sLiveHandle = null;
                             synchronized (sHandles) {
                                 sHandles.remove(v);
                             }
@@ -426,7 +423,6 @@ public final class NavigationHandleHooks {
     // ---------------------------------------------------------------------
 
     static final class TapShield {
-        private static final String SURFACE_FIELD = "cos16_tap_shield";
         private static boolean hooksRegistered;
         private static final WeakHashMap<View, GestureBlockSurface> surfaces =
                 new WeakHashMap<View, GestureBlockSurface>();
@@ -688,9 +684,6 @@ public final class NavigationHandleHooks {
     // ---------------------------------------------------------------------
 
     static final class HiddenBar {
-        private static volatile boolean onDrawHooked;
-        private static volatile boolean alphaHooked;
-
         static void register(XposedModule module, Class<?> handle) {
             try {
                 Class<?> canvas = Class.forName("android.graphics.Canvas", false,
@@ -714,7 +707,6 @@ public final class NavigationHandleHooks {
                             }
                             return chain.proceed();
                         });
-                onDrawHooked = true;
                 log(module, 4, "HIDDENBAR_HOOK_OK onDraw");
             } catch (Throwable failure) {
                 log(module, 5, "HIDDENBAR_NO_MATCH onDraw " + failure);
@@ -746,18 +738,11 @@ public final class NavigationHandleHooks {
                             }
                             return chain.proceed();
                         });
-                alphaHooked = true;
                 log(module, 4, "HIDDENBAR_HOOK_OK setAlpha");
             } catch (Throwable failure) {
                 log(module, 5, "HIDDENBAR_NO_MATCH setAlpha " + failure);
             }
         }
-
-        // Probe helper for the build script / verification stage. Not on any
-        // hot path; both flags are set by register() before any hook call
-        // lands, and callers tolerate the rare race.
-        static boolean isOnDrawHooked() { return onDrawHooked; }
-        static boolean isAlphaHooked() { return alphaHooked; }
     }
 
     // ---------------------------------------------------------------------
@@ -807,18 +792,6 @@ public final class NavigationHandleHooks {
          */
         static boolean shouldConvert(int requested, boolean mbackEnabled, boolean barOnlyEnabled) {
             return requested != 0 && (mbackEnabled || barOnlyEnabled);
-        }
-
-        /**
-         * Upstream chokepoint decision: when SystemUI reads the swipe-side-bar
-         * type (0 = shown, non-zero = hidden) and a feature needs the bar, we
-         * report "shown" so the whole pipeline (observer field,
-         * updateViewVisible$1 runnable, inflater visibility, window alpha,
-         * insets) behaves as if the user kept the bar on. Pixel drawing stays
-         * under the module's own barHidden control.
-         */
-        static boolean shouldOverrideProxyHide(int realType, boolean mbackEnabled, boolean barOnlyEnabled) {
-            return realType != 0 && (mbackEnabled || barOnlyEnabled);
         }
 
         static void register(XposedModule module, ClassLoader loader) {
@@ -1059,7 +1032,7 @@ public final class NavigationHandleHooks {
                             }
                             boolean mback = GestureConfigClient.isMbackEnabled();
                             boolean barOnly = GestureConfigClient.isBarOnlyEnabled();
-                            if (!shouldOverrideProxyHide(1, mback, barOnly)) {
+                            if (!shouldConvert(1, mback, barOnly)) {
                                 sUtilsHideLogged = false;
                                 return result;
                             }
@@ -1089,7 +1062,7 @@ public final class NavigationHandleHooks {
                             int real = (Integer) result;
                             boolean mback = GestureConfigClient.isMbackEnabled();
                             boolean barOnly = GestureConfigClient.isBarOnlyEnabled();
-                            if (!shouldOverrideProxyHide(real, mback, barOnly)) {
+                            if (!shouldConvert(real, mback, barOnly)) {
                                 sProxyOverrideLogged = false;
                                 return result;
                             }

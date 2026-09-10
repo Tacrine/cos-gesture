@@ -3,7 +3,6 @@ package com.cos.lspit.gesture.hook;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static com.cos.lspit.gesture.hook.NavigationHandleHooks.SystemHide.shouldConvert;
-import static com.cos.lspit.gesture.hook.NavigationHandleHooks.SystemHide.shouldOverrideProxyHide;
 
 import org.junit.Test;
 
@@ -82,7 +81,7 @@ public class SystemHideTest {
     // needs the bar so the whole SystemUI pipeline keeps the handle touchable.
 
     private static boolean overrideProxy(int realType, boolean mback, boolean barOnly) {
-        return shouldOverrideProxyHide(realType, mback, barOnly);
+        return shouldConvert(realType, mback, barOnly);
     }
 
     @Test public void proxyHide_typeOne_mbackOn() {
