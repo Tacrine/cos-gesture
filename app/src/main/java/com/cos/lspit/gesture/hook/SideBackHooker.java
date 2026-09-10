@@ -47,11 +47,6 @@ public final class SideBackHooker {
                 GestureConfigClient.reportStatus(module, "HOOK_DISABLED", "policy-disabled");
                 return;
             }
-            if (!hashMatches(param)) {
-                log(module, 4, "HASH_MISMATCH");
-                GestureConfigClient.reportStatus(module, "HASH_MISMATCH", "systemui-sha256");
-                return;
-            }
             ClassLoader loader = param.getDefaultClassLoader();
             Class<?> target;
             try {
