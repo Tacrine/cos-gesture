@@ -4,7 +4,7 @@ import android.content.Context
 import android.widget.Toast
 import com.cos.lspit.gesture.config.GestureConfig
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -23,15 +23,17 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ListItem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -74,7 +76,7 @@ fun GestureSettingsScreen() {
     var config by remember { mutableStateOf(ConfigStore.load(context)) }
     var statusLine by remember { mutableStateOf(readStatusLine(context)) }
     var showConfirm by remember { mutableStateOf(false) }
-        var showThemeDialog by remember { mutableStateOf(false) }
+        var showThemeMenu by remember { mutableStateOf(false) }
         val themeModeCurrent = LocalThemeMode.current
         val setThemeMode = LocalThemeModeSetter.current
         var snackbarMessage by remember { mutableStateOf<String?>(null) }
@@ -84,7 +86,47 @@ fun GestureSettingsScreen() {
     val scope = rememberCoroutineScope()
 
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        TopAppBar(title = stringResource(R.string.settings_title))
+        TopAppBar(
+            title = stringResource(R.string.settings_title),
+            actions = {
+                Box {
+                    IconButton(onClick = { showThemeMenu = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.MoreVert,
+                            contentDescription = stringResource(R.string.theme_mode_label),
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showThemeMenu,
+                        onDismissRequest = { showThemeMenu = false }
+                    ) {
+                        ThemeMode.entries.forEach { mode ->
+                            val label = when (mode) {
+                                ThemeMode.SYSTEM -> stringResource(R.string.theme_mode_system)
+                                ThemeMode.LIGHT -> stringResource(R.string.theme_mode_light)
+                                ThemeMode.DARK -> stringResource(R.string.theme_mode_dark)
+                            }
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                leadingIcon = {
+                                    if (mode == themeModeCurrent) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Check,
+                                            contentDescription = null
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    setThemeMode(mode)
+                                    showThemeMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        )
             LazyColumn(
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp)
@@ -166,42 +208,9 @@ fun GestureSettingsScreen() {
                 }
             }
 
-            item {
-                                    SmallTitle(stringResource(R.string.section_appearance))
-                                    Card(modifier = Modifier.fillMaxWidth()) {
-                                        Column(Modifier.padding(16.dp)) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .clickable { showThemeDialog = true }
-                                                    .padding(vertical = 4.dp)
-                                            ) {
-                                                MiuixText(
-                                                    text = stringResource(R.string.theme_mode_label),
-                                                    modifier = Modifier.weight(1f)
-                                                )
-                                                MiuixText(
-                                                    text = when (themeModeCurrent) {
-                                                        ThemeMode.SYSTEM -> stringResource(R.string.theme_mode_system)
-                                                        ThemeMode.LIGHT -> stringResource(R.string.theme_mode_light)
-                                                        ThemeMode.DARK -> stringResource(R.string.theme_mode_dark)
-                                                    }
-                                                )
-                                                Spacer(Modifier.size(4.dp))
-                                                Icon(
-                                                    imageVector = Icons.Filled.KeyboardArrowRight,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(20.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-
-                                item {
-                                    SmallTitle(stringResource(R.string.section_navigation))
-                Card(modifier = Modifier.fillMaxWidth()) {
+                        item {
+                            SmallTitle(stringResource(R.string.section_navigation))
+                            Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
                         SwitchRow(
                             label = stringResource(R.string.switch_bar_visibility),
@@ -382,56 +391,12 @@ fun GestureSettingsScreen() {
                 }
             }
         )
-    }
-
-                if (showThemeDialog) {
-                    AlertDialog(
-                        onDismissRequest = { showThemeDialog = false },
-                        title = { Text(stringResource(R.string.theme_mode_dialog_title)) },
-                        text = {
-                            Column {
-                                ThemeMode.entries.forEach { mode ->
-                                    val label = when (mode) {
-                                        ThemeMode.SYSTEM -> stringResource(R.string.theme_mode_system)
-                                        ThemeMode.LIGHT -> stringResource(R.string.theme_mode_light)
-                                        ThemeMode.DARK -> stringResource(R.string.theme_mode_dark)
-                                    }
-                                    ListItem(
-                                        headlineContent = { Text(label) },
-                                        leadingContent = {
-                                            if (mode == themeModeCurrent) {
-                                                Icon(
-                                                    imageVector = Icons.Filled.Check,
-                                                    contentDescription = null,
-                                                    tint = MaterialTheme.colorScheme.primary
-                                                )
-                                            } else {
-                                                Spacer(Modifier.size(24.dp))
-                                            }
-                                        },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                setThemeMode(mode)
-                                                showThemeDialog = false
-                                            }
-                                    )
-                                }
-                            }
-                        },
-                        confirmButton = {},
-                        dismissButton = {
-                            TextButton(onClick = { showThemeDialog = false }) {
-                                Text(stringResource(android.R.string.cancel))
-                            }
-                        }
-                    )
-                }
             }
+        }
 
-@Composable
-private fun SwitchRow(
-    label: String,
+        @Composable
+        private fun SwitchRow(
+            label: String,
     icon: ImageVector,
     checked: Boolean,
     enabled: Boolean,
