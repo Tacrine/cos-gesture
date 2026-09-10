@@ -565,11 +565,23 @@ public final class NavigationHandleHooks {
         }
     }
 
+    /** Reflection-handle cache; misses deliberately not cached (hierarchy re-walk is cheap). */
+    private static final ConcurrentHashMap<String, Method> sMethodCache =
+            new ConcurrentHashMap<String, Method>();
+    private static final ConcurrentHashMap<String, Field> sFieldCache =
+            new ConcurrentHashMap<String, Field>();
+
     private static Method findMethod(Class<?> type, String name, Class<?>... parameters) {
+        StringBuilder key = new StringBuilder(type.getName()).append('#').append(name).append('(');
+        for (Class<?> parameter : parameters) key.append(parameter.getName()).append(';');
+        String cacheKey = key.append(')').toString();
+        Method cached = sMethodCache.get(cacheKey);
+        if (cached != null) return cached;
         for (Class<?> current = type; current != null; current = current.getSuperclass()) {
             try {
                 Method method = current.getDeclaredMethod(name, parameters);
                 method.setAccessible(true);
+                sMethodCache.put(cacheKey, method);
                 return method;
             } catch (NoSuchMethodException ignored) {
             }
@@ -924,7 +936,7 @@ public final class NavigationHandleHooks {
             // Restore the inflater layout: the cold-boot hide branch ran
             // resizeLayout() with hide=true (collapsed frame, rebuilt children).
             try {
-                Object inflater = readField(navView, "mNavigationInflaterView");
+                Object inflater = getObjectField(navView, "mNavigationInflaterView");
                 if (inflater != null) {
                     Method resize = findMethod(inflater.getClass(), "resizeLayout");
                     if (resize != null) {
@@ -979,29 +991,6 @@ public final class NavigationHandleHooks {
                 log(module, 5, "SYSHIDE_REAPPLY_FAILED onChange-replay " + failure);
                 return false;
             }
-        }
-
-        /** Reads an instance field by name along the class hierarchy. */
-        private static Object readField(Object target, String name) throws Exception {
-            for (Class<?> c = target.getClass(); c != null; c = c.getSuperclass()) {
-                try {
-                    java.lang.reflect.Field field = c.getDeclaredField(name);
-                    field.setAccessible(true);
-                    return field.get(target);
-                } catch (NoSuchFieldException ignored) {
-                }
-            }
-            return null;
-        }
-
-        private static Method findMethod(Class<?> start, String name, Class<?>... params) {
-            for (Class<?> c = start; c != null; c = c.getSuperclass()) {
-                try {
-                    return c.getDeclaredMethod(name, params);
-                } catch (NoSuchMethodException ignored) {
-                }
-            }
-            return null;
         }
 
         private static void hookUtilsHideMode(XposedModule module, ClassLoader loader) {
@@ -1477,7 +1466,6 @@ public final class NavigationHandleHooks {
         try {
             Field f = findField(v.getClass(), name);
             if (f == null) return fallback;
-            f.setAccessible(true);
             return f.getInt(v);
         } catch (Throwable t) {
             return fallback;
@@ -1489,7 +1477,6 @@ public final class NavigationHandleHooks {
         try {
             Field field = findField(value.getClass(), name);
             if (field == null) return null;
-            field.setAccessible(true);
             return field.get(value);
         } catch (Throwable ignored) {
             return null;
@@ -1497,12 +1484,20 @@ public final class NavigationHandleHooks {
     }
 
     private static Field findField(Class<?> clazz, String name) {
+        String cacheKey = clazz.getName() + '#' + name;
+        Field cached = sFieldCache.get(cacheKey);
+        if (cached != null) return cached;
         for (Class<?> k = clazz; k != null && k != Object.class; k = k.getSuperclass()) {
             try {
-                return k.getDeclaredField(name);
+                Field field = k.getDeclaredField(name);
+                field.setAccessible(true);
+                sFieldCache.put(cacheKey, field);
+                return field;
             } catch (NoSuchFieldException ignored) {
             }
         }
+        // No negative cache: misses (viewScreenLeft, f$0 on unrelated classes)
+        // re-walk the hierarchy, which is cheap enough to accept.
         return null;
     }
 
