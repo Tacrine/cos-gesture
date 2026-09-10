@@ -27,6 +27,7 @@ import android.widget.LinearLayout;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.WeakHashMap;
 import java.lang.ref.WeakReference;
 import java.util.concurrent.ConcurrentHashMap;
@@ -68,6 +69,10 @@ public final class NavigationHandleHooks {
      *  real key, observes it for visibility enforcement, and additionally converts
      *  SystemUI's true-hide (window alpha 0) into pixel-only hide so mBack survives. */
     private static final String SETTING_HIDE_GESTURE_BAR = "gesture_side_hide_bar_prevention_enable";
+    /** Cached value of {@link #SETTING_HIDE_GESTURE_BAR}; see {@link #readHideGestureBar}. */
+    private static volatile Integer sHideGestureBarValue;
+    /** True only after the secure-setting observer registered successfully. */
+    private static volatile boolean sSecureObserverLive;
 
     private static volatile XposedModule sModule;
     private static volatile View sLiveHandle;
@@ -373,14 +378,47 @@ public final class NavigationHandleHooks {
                         new ContentObserver(new Handler(Looper.getMainLooper())) {
                             @Override
                             public void onChange(boolean selfChange) {
+                                refreshHideGestureBarCache();
                                 applyVisibilityHandles();
                             }
                         });
+                // Seed the cache BEFORE flipping the live flag (both volatile):
+                // a reader that sees live=true must also see the seeded value,
+                // otherwise the first reads after registration would run on a
+                // frozen pre-registration snapshot.
+                refreshHideGestureBarCache();
+                sSecureObserverLive = true;
                 log(module, 4, "HOOK_OK secure-observer " + SETTING_HIDE_GESTURE_BAR);
             } catch (Throwable ignored) {
                 report(module, "NO_MATCH", "secure-observer skipped");
             }
         });
+    }
+
+    /**
+     * Live view of the secure "hide gesture bar" setting. While the observer
+     * is not confirmed live the cache is bypassed and every read is a fresh
+     * Binder query (self-healing: registration happens before the host
+     * Application exists and may silently never succeed); once live, reads
+     * come from the cache that onChange keeps up to date.
+     */
+    private static int readHideGestureBar(View v) {
+        Integer cached = sHideGestureBarValue;
+        if (cached != null && sSecureObserverLive) return cached;
+        int value = Settings.Secure.getInt(
+                v.getContext().getContentResolver(), SETTING_HIDE_GESTURE_BAR, 0);
+        sHideGestureBarValue = value;
+        return value;
+    }
+
+    private static void refreshHideGestureBarCache() {
+        try {
+            Context ctx = GestureConfigClient.systemContext();
+            if (ctx == null) return;
+            sHideGestureBarValue = Settings.Secure.getInt(
+                    ctx.getContentResolver(), SETTING_HIDE_GESTURE_BAR, 0);
+        } catch (Throwable ignored) {
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -525,9 +563,16 @@ public final class NavigationHandleHooks {
             }
         }
 
+        // Main-thread-only scratch (both consumers - applyInsets during layout
+        // and GestureBlockSurface.update - run on the SystemUI main thread and
+        // never let the returned rect escape their call frame).
+        private static final int[] sHandleLocation = new int[2];
+        private static final int[] sHostLocation = new int[2];
+        private static final Rect sBarRect = new Rect();
+
         private static Rect barRect(View handle, View host) {
-            int[] handleLocation = new int[2];
-            int[] hostLocation = new int[2];
+            int[] handleLocation = sHandleLocation;
+            int[] hostLocation = sHostLocation;
             handle.getLocationInWindow(handleLocation);
             host.getLocationInWindow(hostLocation);
             int density = Math.max(1, Math.round(density(handle)));
@@ -539,8 +584,9 @@ public final class NavigationHandleHooks {
             int centerY = handleLocation[1] - hostLocation[1]
                     + handle.getHeight() - bottom - barHeight / 2;
             int top = centerY - barHeight / 2 - pad;
-            return new Rect(centerX - width / 2, top, centerX + width / 2,
+            sBarRect.set(centerX - width / 2, top, centerX + width / 2,
                     centerY + barHeight / 2 + pad);
+            return sBarRect;
         }
 
         private static View findHandleInTree(View view) {
@@ -611,11 +657,15 @@ public final class NavigationHandleHooks {
             setY(rect.top);
         }
 
+        // Main-thread-only scratch for dispatchToSource (touch dispatch).
+        private static final int[] sSourceLocation = new int[2];
+        private static final int[] sSurfaceLocation = new int[2];
+
         void dispatchToSource(MotionEvent event) {
             MotionEvent forwarded = MotionEvent.obtain(event);
             try {
-                int[] sourceLocation = new int[2];
-                int[] surfaceLocation = new int[2];
+                int[] sourceLocation = sSourceLocation;
+                int[] surfaceLocation = sSurfaceLocation;
                 source.getLocationInWindow(sourceLocation);
                 getLocationInWindow(surfaceLocation);
                 forwarded.offsetLocation(
@@ -1083,8 +1133,7 @@ public final class NavigationHandleHooks {
 
         static void applyVisibility(View v) {
             try {
-                int hide = Settings.Secure.getInt(
-                        v.getContext().getContentResolver(), SETTING_HIDE_GESTURE_BAR, 0);
+                int hide = readHideGestureBar(v);
                 // mBack and the bar-only gate need a visible bar, so they override
                 // the "hidden" setting.
                 boolean show = GestureConfigClient.isMbackEnabled()
@@ -1132,7 +1181,18 @@ public final class NavigationHandleHooks {
             if (action == MotionEvent.ACTION_DOWN) {
                 sInRange.put(downTime, isInBarRange(handle, ev));
             }
-            if (!Boolean.TRUE.equals(sInRange.get(downTime))) return false;
+            boolean inRange = Boolean.TRUE.equals(sInRange.get(downTime));
+            // Out-of-band entries never reach handleTouch's own terminal
+            // cleanup, so clear them here - but only when out of range: an
+            // unconditional remove before the get would also drop in-band
+            // gestures, losing tap-back and leaking their long-press runnables.
+            boolean terminal = action == MotionEvent.ACTION_UP
+                    || action == MotionEvent.ACTION_CANCEL
+                    || action == MotionEvent.ACTION_POINTER_DOWN;
+            if (terminal && !inRange) {
+                sInRange.remove(downTime);
+            }
+            if (!inRange) return false;
             handleTouch(handle, ev, downTime);
             return true;
         }
@@ -1289,10 +1349,15 @@ public final class NavigationHandleHooks {
         }
 
         static void detach(View handle) {
-            for (Iterator<Gesture> it = sGestures.values().iterator(); it.hasNext(); ) {
-                Gesture gg = it.next();
+            for (Iterator<Map.Entry<Long, Gesture>> it = sGestures.entrySet().iterator();
+                    it.hasNext(); ) {
+                Map.Entry<Long, Gesture> entry = it.next();
+                Gesture gg = entry.getValue();
                 if (gg.handle == handle) {
                     cancelLongPress(gg);
+                    // sInRange is keyed by downTime with no handle reference,
+                    // so the key has to come from the gesture entry itself.
+                    sInRange.remove(entry.getKey());
                     it.remove();
                 }
             }
@@ -1357,6 +1422,10 @@ public final class NavigationHandleHooks {
     // ---------------------------------------------------------------------
 
     static final class MBackSurface extends View {
+        // Main-thread-only scratch for update() (called from touch handling).
+        private static final int[] sSourceLoc = new int[2];
+        private static final int[] sHostLoc = new int[2];
+
         private final View source;
         private final ViewGroup host;
         private final Runnable hideRunnable = new Runnable() {
@@ -1410,8 +1479,9 @@ public final class NavigationHandleHooks {
                 lp.height = height;
                 setLayoutParams(lp);
             }
-            int[] sl = new int[2];
-            int[] hl = new int[2];
+            // Main-thread-only scratch for update() (called from touch handling).
+            int[] sl = sSourceLoc;
+            int[] hl = sHostLoc;
             source.getLocationInWindow(sl);
             host.getLocationInWindow(hl);
             int cx = (sl[0] - hl[0]) + source.getWidth() / 2;
