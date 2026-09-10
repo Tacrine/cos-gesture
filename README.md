@@ -69,9 +69,11 @@ gradlew.bat :app:testDebugUnitTest :app:assembleDebug
 
 ## 工作原理概览
 
-- **拦截对象**：AOSP-16 `com.android.systemui.navigationbar.gestural.EdgeBackGestureHandler`
-  私有方法 `isWithinTouchRegion(MotionEvent)Z`，命中后强制返回 `false`，**不调用**
-  `chain.proceed()`。
+- **拦截对象**：ColorOS 16（Oplus）`com.oplus.systemui.navigationbar.gesture.sidegesture.SideGestureDetector`
+  的 `onMotionEventImpl(MotionEvent)V`，并用描述符 `(Landroid/view/MotionEvent;)V`
+  严格校验，防止固件漂移后 hook 到错误的重载。命中需拦截的 `ACTION_DOWN`
+  （按左右开关与 barOnly 区域判定）时直接跳过原方法体（不调用
+  `chain.proceed()`），其余事件原样放行。
 - **底部上滑手势**（Home / 最近任务）由 Quickstep 负责，不走本钩子路径，保留。
 - **小白条区域**：mBack / TapShield / OLED-hide 通过 `NavigationHandleHooks`
   中的 `MBack`、`TapShield`、`HiddenBar` 三个子模块实现，分别 hook
