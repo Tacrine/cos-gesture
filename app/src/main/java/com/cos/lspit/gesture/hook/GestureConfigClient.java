@@ -13,6 +13,7 @@ import io.github.libxposed.api.XposedModule;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.lang.reflect.Method;
 
 /**
  * SystemUI-side mirror of the module config. Reads one snapshot from the
@@ -36,14 +37,23 @@ public final class GestureConfigClient {
             Uri.parse("content://com.cos.lspit.gesture.config/status");
     private static final int INIT_MAX_RETRIES = 40;
     private static final long INIT_RETRY_DELAY_MS = 500L;
-    /** After the fast retries are exhausted, keep retrying at this cadence forever:
-     *  a force-stopped module app's provider never auto-restarts, so giving up
+    /** After the fast retries are exhausted, keep retrying forever with an
+     *  exponential backoff capped here: 30s -> 1m -> 2m -> 4m -> 5m -> 5m ...
+     *  A force-stopped module app's provider never auto-restarts, so giving up
      *  permanently would leave mback/barOnly dead until the next manual toggle. */
     private static final long SLOW_RETRY_DELAY_MS = 30_000L;
+    private static final long SLOW_RETRY_MAX_DELAY_MS = 300_000L;
     private static int initRetriesLeft = INIT_MAX_RETRIES;
+    /** Slow-retry backoff state; only ever touched on the cfg handler thread. */
+    private static long slowRetryDelayMs = SLOW_RETRY_DELAY_MS;
     private static volatile boolean slowRetryAnnounced;
     /** Guards the single lazy registration of the background observer thread. */
     private static volatile boolean observerStarted;
+
+    /** Main-looper handler for listener notification; lazily created once. */
+    private static volatile Handler sMainHandler;
+    /** Handler on the dedicated "cos16-gesture-cfg" thread; all sync/retry work runs here. */
+    private static volatile Handler sCfgHandler;
 
     private static volatile boolean masterEnabled = true;
     private static volatile boolean leftEnabled = true;
@@ -78,7 +88,36 @@ public final class GestureConfigClient {
 
     /** Runs a listener on the SystemUI main looper; used by refresh's notifier. */
     public static void postOnMain(Runnable action) {
-        new Handler(Looper.getMainLooper()).post(action);
+        mainHandler().post(action);
+    }
+
+    private static Handler mainHandler() {
+        Handler handler = sMainHandler;
+        if (handler == null) {
+            synchronized (GestureConfigClient.class) {
+                if (sMainHandler == null) {
+                    sMainHandler = new Handler(Looper.getMainLooper());
+                }
+                handler = sMainHandler;
+            }
+        }
+        return handler;
+    }
+
+    /** Lazily creates the single background config thread and returns its handler. */
+    private static Handler cfgHandler() {
+        Handler handler = sCfgHandler;
+        if (handler == null) {
+            synchronized (GestureConfigClient.class) {
+                if (sCfgHandler == null) {
+                    HandlerThread thread = new HandlerThread("cos16-gesture-cfg");
+                    thread.start();
+                    sCfgHandler = new Handler(thread.getLooper());
+                }
+                handler = sCfgHandler;
+            }
+        }
+        return handler;
     }
 
     /** Registers a callback fired (on the main looper) after each successful refresh. */
@@ -90,53 +129,58 @@ public final class GestureConfigClient {
      * Loads the first snapshot and starts the live observer. The host
      * Application may not exist yet when the module registers its hooks
      * (onPackageLoaded fires before Application.onCreate), so the context
-     * lookup is retried on the main looper until it succeeds.
+     * lookup is retried until it succeeds.
+     *
+     * <p>The whole body is posted to the cfg handler: callers may be arbitrary
+     * threads (hook setup, hash-gate background thread), and the retry state
+     * below must stay confined to the single cfg thread.
      */
     public static void init() {
         if (initialized) return;
-        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+        cfgHandler().post(new Runnable() {
             @Override
             public void run() {
-                if (initialized) return;
-                Context context = currentContext();
-                if (context == null) {
-                    retryOrFail("no-application-context");
-                    return;
-                }
+                initOnCfgThread();
+            }
+        });
+    }
+
+    private static void initOnCfgThread() {
+        if (initialized) return;
+        Context context = currentContext();
+        if (context == null) {
+            retryOrFail("no-application-context");
+            return;
+        }
+        if (!observerStarted) {
+            synchronized (GestureConfigClient.class) {
                 if (!observerStarted) {
-                    synchronized (GestureConfigClient.class) {
-                        if (!observerStarted) {
-                            observerStarted = true;
-                            HandlerThread thread = new HandlerThread("cos16-gesture-cfg");
-                            thread.start();
-                            Handler handler = new Handler(thread.getLooper());
-                            try {
-                                context.getContentResolver().registerContentObserver(
-                                        CONFIG_URI, true, new ContentObserver(handler) {
-                                            @Override
-                                            public void onChange(boolean selfChange) {
-                                                Context current = currentContext();
-                                                if (current != null) refresh(current);
-                                            }
-                                        });
-                            } catch (Throwable failure) {
-                                Log.w(TAG, "CONFIG_OBSERVER_FAILED " + failure);
-                            }
-                        }
+                    observerStarted = true;
+                    try {
+                        context.getContentResolver().registerContentObserver(
+                                CONFIG_URI, true, new ContentObserver(cfgHandler()) {
+                                    @Override
+                                    public void onChange(boolean selfChange) {
+                                        Context current = currentContext();
+                                        if (current != null) refresh(current);
+                                    }
+                                });
+                    } catch (Throwable failure) {
+                        Log.w(TAG, "CONFIG_OBSERVER_FAILED " + failure);
                     }
                 }
-                if (!refresh(context)) {
-                    // Provider snapshot not readable yet (module app / provider not
-                    // warm on cold SystemUI boot). Keep retrying so mback / width /
-                    // barOnly actually arm; a dead silent return here used to leave
-                    // them at their defaults until a later config change fired the
-                    // observer.
-                    retryOrFail("provider-not-ready");
-                    return;
-                }
-                initialized = true;
             }
-        }, 0L);
+        }
+        if (!refresh(context)) {
+            // Provider snapshot not readable yet (module app / provider not
+            // warm on cold SystemUI boot). Keep retrying so mback / width /
+            // barOnly actually arm; a dead silent return here used to leave
+            // them at their defaults until a later config change fired the
+            // observer.
+            retryOrFail("provider-not-ready");
+            return;
+        }
+        initialized = true;
     }
 
     private static void retryOrFail(String reason) {
@@ -144,21 +188,23 @@ public final class GestureConfigClient {
             if (!slowRetryAnnounced) {
                 slowRetryAnnounced = true;
                 Log.w(TAG, "CONFIG_INIT_FAILED " + reason
-                        + " (fast retries exhausted, retrying every "
-                        + (SLOW_RETRY_DELAY_MS / 1000) + "s)");
+                        + " (fast retries exhausted, slow retries back off to "
+                        + (SLOW_RETRY_MAX_DELAY_MS / 1000) + "s max)");
             }
-            new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+            long delay = slowRetryDelayMs;
+            slowRetryDelayMs = Math.min(slowRetryDelayMs * 2, SLOW_RETRY_MAX_DELAY_MS);
+            cfgHandler().postDelayed(new Runnable() {
                 @Override
                 public void run() {
-                    init();
+                    initOnCfgThread();
                 }
-            }, SLOW_RETRY_DELAY_MS);
+            }, delay);
             return;
         }
-        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+        cfgHandler().postDelayed(new Runnable() {
             @Override
             public void run() {
-                init();
+                initOnCfgThread();
             }
         }, INIT_RETRY_DELAY_MS);
     }
@@ -249,10 +295,17 @@ public final class GestureConfigClient {
     }
 
     /** Reflects the host application context without holding any module-side reference. */
+    private static volatile Method sCurrentApplicationMethod;
+
     private static Context currentContext() {
         try {
-            Class<?> thread = Class.forName("android.app.ActivityThread");
-            return (Context) thread.getMethod("currentApplication").invoke(null);
+            Method method = sCurrentApplicationMethod;
+            if (method == null) {
+                Class<?> thread = Class.forName("android.app.ActivityThread");
+                method = thread.getMethod("currentApplication");
+                sCurrentApplicationMethod = method;
+            }
+            return (Context) method.invoke(null);
         } catch (Throwable ignored) {
             return null;
         }
