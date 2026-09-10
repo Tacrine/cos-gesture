@@ -208,12 +208,6 @@ public final class NavigationHandleHooks {
                                 && arg instanceof MotionEvent) {
                             View rv = (View) receiver;
                             MotionEvent me = (MotionEvent) arg;
-                            if (me.getActionMasked() == MotionEvent.ACTION_DOWN) {
-                                log(5, "TOUCHDOWN cls=" + rv.getClass().getSimpleName()
-                                        + " x=" + Math.round(me.getX())
-                                        + " rawX=" + Math.round(me.getRawX())
-                                        + " y=" + Math.round(me.getY()));
-                            }
                             if (GestureConfigClient.isMbackEnabled()
                                     && MBack.onTouch(rv, me)) {
                                 return null; // swallowed: handled inside the mBack band
@@ -644,17 +638,14 @@ public final class NavigationHandleHooks {
                         .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                         .intercept(chain -> {
                             try {
-                                Object thiz = chain.getThisObject();
-                                if (thiz instanceof View && !isShadeExpanded((View) thiz)) {
-                                    boolean moduleHide = GestureConfigClient.isBarHiddenEnabled();
-                                    boolean sysConverted = SystemHide.sConvertedHideActive;
-                                    if (moduleHide) {
-                                        log(module, 5, "HIDDENBAR_SKIP_DRAW");
-                                        return null;
-                                    }
-                                    if (sysConverted) {
-                                        log(module, 5, "HIDDENBAR_SKIP_DRAW_SYSHIDE");
-                                        return null;
+                                // Fast volatile reads first; only when a hide
+                                // source is active pay for the shade check.
+                                boolean moduleHide = GestureConfigClient.isBarHiddenEnabled();
+                                boolean sysConverted = SystemHide.sConvertedHideActive;
+                                if (moduleHide || sysConverted) {
+                                    Object thiz = chain.getThisObject();
+                                    if (thiz instanceof View && !isShadeExpanded((View) thiz)) {
+                                        return null; // skip drawing the hint bar
                                     }
                                 }
                             } catch (Throwable ignored) {
@@ -689,10 +680,7 @@ public final class NavigationHandleHooks {
                             if (thiz instanceof View
                                     && !isShadeExpanded((View) thiz)
                                     && handle.isInstance(thiz)) {
-                                log(5, moduleHide
-                                        ? "HIDDENBAR_SKIP_ALPHA"
-                                        : "HIDDENBAR_SKIP_ALPHA_SYSHIDE");
-                                return null;
+                                return null; // skip the alpha change on the bar
                             }
                             return chain.proceed();
                         });
@@ -1146,6 +1134,7 @@ public final class NavigationHandleHooks {
                 new ConcurrentHashMap<Long, Boolean>();
         private static final WeakHashMap<View, MBackSurface> sSurfaces =
                 new WeakHashMap<View, MBackSurface>();
+        private static volatile boolean sSwipeCancelLogged;
 
         /** Returns true when the event falls inside the mBack band and was consumed. */
         static boolean onTouch(View handle, MotionEvent ev) {
@@ -1169,8 +1158,6 @@ public final class NavigationHandleHooks {
                 ng.downX = event.getX();
                 ng.downY = event.getY();
                 sGestures.put(downTime, ng);
-                log(5, "MBACK DOWN x=" + Math.round(event.getX())
-                        + " y=" + Math.round(event.getY()));
                 // The ripple is cosmetic: never let it block the touch handling.
                 try {
                     MBackSurface surface = ensureSurface(handle);
@@ -1206,12 +1193,17 @@ public final class NavigationHandleHooks {
                 if (Math.abs(dx) > swipe || dy < -swipe) {
                     g.cancelled = true;
                     cancelLongPress(g);
-                    log(5, "MBACK SWIPE-CANCEL dx=" + Math.round(dx)
-                            + " dy=" + Math.round(dy));
+                    if (!sSwipeCancelLogged) {
+                        log(5, "MBACK SWIPE-CANCEL dx=" + Math.round(dx)
+                                + " dy=" + Math.round(dy));
+                        sSwipeCancelLogged = true;
+                    }
                     try {
                         hideSurface(handle);
                     } catch (Throwable ignored) {
                     }
+                } else {
+                    sSwipeCancelLogged = false;
                 }
                 return;
             }

@@ -112,7 +112,6 @@ public final class SideBackHooker {
                                 + " barOnly=" + GestureConfigClient.isBarOnlyEnabled());
                         return null; // skip original -> no bottom Home/Recents off the bar
                     }
-                    log(module, 4, "PASS down x=" + event.getX(0) + " y=" + event.getY(0));
                 }
                 // Non-DOWN events pass through silently (no per-move log flood).
             } catch (Throwable failure) {
