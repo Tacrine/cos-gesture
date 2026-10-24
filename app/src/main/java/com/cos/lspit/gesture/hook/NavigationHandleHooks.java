@@ -26,11 +26,19 @@ import android.widget.LinearLayout;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.WeakHashMap;
 import java.lang.ref.WeakReference;
 import java.util.concurrent.ConcurrentHashMap;
+
+import com.cos.lspit.gesture.config.BarBandPolicy;
+import com.cos.lspit.gesture.config.BarPixelPolicy;
 
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
@@ -83,6 +91,18 @@ public final class NavigationHandleHooks {
     /** Orientation per live handle, recorded by the setVertical hook. */
     private static final java.util.Map<View, Boolean> sVertical =
             new WeakHashMap<View, Boolean>();
+    /** Suppression targets: identity + weak refs, exactly like sHandles (never a strong set). */
+    private static final Set<View> sSuppressTargets = Collections.newSetFromMap(new WeakHashMap<View, Boolean>());
+    /** Original alpha of every view we changed ("we touched it"); weak keys. */
+    private static final WeakHashMap<View, Float> sRecordedAlpha = new WeakHashMap<>();
+
+    /** True only inside our own setAlpha window (Z18/Z21). */
+    private static volatile boolean sModuleAlphaWrite = false;
+    /** The view our current setAlpha window belongs to (Z21: bound to one view). */
+    private static volatile View sAlphaWriteTarget;
+
+    /** C6: cached shade state; the onDraw and setAlpha hot paths only read this. */
+    private static volatile boolean sShadeExpandedCache = false;
 
     private NavigationHandleHooks() {}
 
@@ -110,6 +130,12 @@ public final class NavigationHandleHooks {
             }
             try {
                 TapShield.sync(v);
+            } catch (Throwable ignored) {
+            }
+            try {
+                // C6 refresh source: a config change re-reads the real shade state and
+                // reacts to the transition (restore / re-suppress).
+                HiddenBar.refreshShadeCache(v);
             } catch (Throwable ignored) {
             }
         }
@@ -256,6 +282,12 @@ public final class NavigationHandleHooks {
                                 TapShield.sync(v);
                             } catch (Throwable ignored) {
                             }
+                            try {
+                                // C6/C7: prime the shade cache and resolve the pixel
+                                // targets on attach (both non-hot entry points).
+                                HiddenBar.refreshShadeCache(v);
+                            } catch (Throwable ignored) {
+                            }
                             log(module, 4, "HANDLE_ATTACHED vis=" + v.getVisibility()
                                     + " id=" + System.identityHashCode(v)
                                     + " count=" + handleCount());
@@ -265,6 +297,29 @@ public final class NavigationHandleHooks {
         } catch (Throwable ignored) {
             report(module, "NO_MATCH", "attach hook skipped");
         }
+    }
+
+    /** Handles with a queued post-layout width re-apply (dedupe; main thread only). */
+    private static final java.util.Set<View> sWidthPostPending =
+            java.util.Collections.newSetFromMap(new WeakHashMap<View, Boolean>());
+
+    /** Re-applies the configured width once the running layout pass has finished. */
+    private static void postApplyWidth(final View v) {
+        synchronized (sWidthPostPending) {
+            if (!sWidthPostPending.add(v)) return; // already queued
+        }
+        v.post(new Runnable() {
+            @Override
+            public void run() {
+                // First statement: release the dedupe slot, so a later layout pass can
+                // queue the next re-apply. Both sides run on the main thread.
+                sWidthPostPending.remove(v);
+                try {
+                    Appearance.applyWidth(v);
+                } catch (Throwable ignored) {
+                }
+            }
+        });
     }
 
     private static void hookLayout(XposedModule module, Class<?> handle) {
@@ -277,12 +332,29 @@ public final class NavigationHandleHooks {
                         Object result = chain.proceed();
                         Object thiz = chain.getThisObject();
                         if (thiz instanceof View) {
+                            View layoutView = (View) thiz;
                             try {
-                                MBack.positionSurface((View) thiz);
+                                MBack.positionSurface(layoutView);
                             } catch (Throwable ignored) {
                             }
                             try {
-                                TapShield.position((View) thiz);
+                                TapShield.position(layoutView);
+                            } catch (Throwable ignored) {
+                            }
+                            try {
+                                // A config that arrived after attach lands here: re-apply
+                                // the width, but never mutate LayoutParams while a layout
+                                // pass is running (that would request another layout).
+                                if (layoutView.isInLayout()) {
+                                    postApplyWidth(layoutView);
+                                } else {
+                                    Appearance.applyWidth(layoutView);
+                                }
+                            } catch (Throwable ignored) {
+                            }
+                            try {
+                                // C7: the sibling views may have been rebuilt by this pass.
+                                HiddenBar.onHandleLaidOut(layoutView);
                             } catch (Throwable ignored) {
                             }
                         }
@@ -317,6 +389,12 @@ public final class NavigationHandleHooks {
                                 TapShield.remove(v);
                             } catch (Throwable ignored) {
                             }
+                            try {
+                                // V6: restore (and cancel the 5s recheck) before this view
+                                // is forgotten; the record/entry removal happens inside.
+                                HiddenBar.onHandleDetached(v);
+                            } catch (Throwable ignored) {
+                            }
                         }
                         return result;
                     });
@@ -348,6 +426,11 @@ public final class NavigationHandleHooks {
                                 Appearance.applyAll(v);
                             } catch (Throwable ignored) {
                             }
+                            try {
+                                // C7: re-resolve after a setVertical (layout geometry moved).
+                                HiddenBar.onHandleLaidOut(v);
+                            } catch (Throwable ignored) {
+                            }
                         }
                         return result;
                     });
@@ -377,6 +460,12 @@ public final class NavigationHandleHooks {
                             public void onChange(boolean selfChange) {
                                 refreshHideGestureBarCache();
                                 applyVisibilityHandles();
+                                try {
+                                    // C6 refresh source (non-hot): the user just toggled the
+                                    // OS hide switch, so re-read the shade state too.
+                                    HiddenBar.refreshShadeForAll();
+                                } catch (Throwable ignored) {
+                                }
                             }
                         });
                 // Seed the cache BEFORE flipping the live flag (both volatile):
@@ -684,6 +773,29 @@ public final class NavigationHandleHooks {
     // ---------------------------------------------------------------------
 
     static final class HiddenBar {
+        /** Last HIDDENBAR_STATE tuple logged; keeps the onDraw hot path out of logcat. */
+        private static volatile String sPixelState;
+        /** One-shot per suppression period: targets already resolved. */
+        private static volatile boolean sTargetsResolved;
+        /** Guards the single (unconditional) setAlpha hook installation. */
+        private static volatile boolean sFallbackRegistered;
+        /** C6: periodic recheck of the shade state while suppression is active. */
+        private static final long SHADE_RECHECK_MS = 5000L;
+        /** C6: at most one pending recheck (never stacked). */
+        private static volatile boolean sShadeRecheckPending;
+        /** C6: the handle the pending recheck belongs to. */
+        private static volatile View sShadeRecheckView;
+        private static final Runnable SHADE_RECHECK = new Runnable() {
+            @Override
+            public void run() {
+                sShadeRecheckPending = false;
+                View view = sShadeRecheckView;
+                if (view == null) return;
+                refreshShadeCache(view);
+                if (suppressionGate()) scheduleShadeRecheck(view);
+            }
+        };
+
         static void register(XposedModule module, Class<?> handle) {
             try {
                 Class<?> canvas = Class.forName("android.graphics.Canvas", false,
@@ -693,14 +805,33 @@ public final class NavigationHandleHooks {
                         .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                         .intercept(chain -> {
                             try {
-                                // Fast volatile reads first; only when a hide
-                                // source is active pay for the shade check.
+                                // Fast volatile reads first; the shade check is a cache
+                                // read, so the hot path never reflects (C6).
                                 boolean moduleHide = GestureConfigClient.isBarHiddenEnabled();
                                 boolean sysConverted = SystemHide.sConvertedHideActive;
                                 if (moduleHide || sysConverted) {
                                     Object thiz = chain.getThisObject();
-                                    if (thiz instanceof View && !isShadeExpanded((View) thiz)) {
-                                        return null; // skip drawing the hint bar
+                                    if (thiz instanceof View) {
+                                        View view = (View) thiz;
+                                        // Keep the shade cache fresh from this hook site;
+                                        // scheduleShadeRecheck is deduped and cheap.
+                                        scheduleShadeRecheck(view);
+                                        try {
+                                            logPixelState(module, view, moduleHide,
+                                                    sysConverted, sShadeExpandedCache);
+                                        } catch (Throwable ignored) {
+                                            // Probe logging must never change drawing.
+                                        }
+                                        if (!sShadeExpandedCache) {
+                                            // C7: resolve the sibling painters once per
+                                            // suppression period, then zero the handle itself.
+                                            if (!sTargetsResolved) {
+                                                resolveSuppressTargets(navBarAncestor(view));
+                                            }
+                                            // momus obs5: the single alpha writer, even here.
+                                            zeroTarget(view);
+                                            return null; // skip drawing the hint bar
+                                        }
                                     }
                                 }
                             } catch (Throwable ignored) {
@@ -710,11 +841,254 @@ public final class NavigationHandleHooks {
                 log(module, 4, "HIDDENBAR_HOOK_OK onDraw");
             } catch (Throwable failure) {
                 log(module, 5, "HIDDENBAR_NO_MATCH onDraw " + failure);
-                registerAlphaFallback(module, handle);
+            }
+            // Unconditional registration: the setAlpha fallback is the safety net for
+            // ROMs whose bar is painted by a parent layer instead of this onDraw.
+            registerAlphaFallback(module, handle);
+        }
+
+        /**
+         * Probe-only: HIDDENBAR_STATE, PIXEL_OWNER and PIXEL_OWNER_SIBLING, emitted from
+         * the onDraw path while a hide source is active and only when the observed
+         * tuple changes (state-change dedupe; no time source, no per-frame flood).
+         * {@code shade} is passed in by the caller, so this method never calls
+         * the shade-expansion helper itself.
+         */
+        private static void logPixelState(XposedModule module, View handle,
+                boolean moduleHide, boolean sysConverted, boolean shade) {
+            float alpha = handle.getAlpha();
+            int vis = handle.getVisibility();
+            String state = moduleHide + "|" + sysConverted + "|" + shade + "|" + alpha
+                    + "|" + vis;
+            if (state.equals(sPixelState)) return;
+            sPixelState = state;
+            log(module, 4, "HIDDENBAR_STATE module=" + moduleHide + " sys=" + sysConverted
+                    + " shade=" + shade + " alpha=" + alpha + " vis=" + vis);
+            log(module, 4, "PIXEL_OWNER handle.onDraw alpha=" + alpha + " vis=" + vis);
+            log(module, 4, "PIXEL_OWNER_SIBLING " + siblingText(handle));
+            if (alpha == 0f) {
+                // Residual pixels with our own alpha already 0 have an unknown owner:
+                // report it, never block on it (plan C7 note on PAINTER_UNKNOWN).
+                log(module, 5, "PAINTER_UNKNOWN handle alpha=0 vis=" + vis);
+            }
+        }
+
+        /**
+         * Probe-only: reports one admitted sibling painter from the SAME target set the
+         * suppression path uses (no second, looser policy anywhere).
+         */
+        private static String siblingText(View handle) {
+            try {
+                View navBar = navBarAncestor(handle);
+                if (navBar != null) resolveSuppressTargets(navBar);
+                synchronized (sSuppressTargets) {
+                    for (View target : sSuppressTargets) {
+                        if (target == null || target == handle) continue;
+                        return target.getClass().getName() + " vis=" + target.getVisibility()
+                                + " alpha=" + target.getAlpha();
+                    }
+                }
+                return "none";
+            } catch (Throwable ignored) {
+                return "none";
+            }
+        }
+
+        /** Parent chain up to the NavigationBarView ancestor (same stop condition as the shade walk). */
+        private static View navBarAncestor(View view) {
+            View current = view;
+            while (current != null) {
+                if (current.getClass().getName().endsWith("NavigationBarView")) return current;
+                ViewParent parent = current.getParent();
+                current = parent instanceof View ? (View) parent : null;
+            }
+            return null;
+        }
+
+        /** Z13/X1: the named suppression gate; the interceptor and the restore loop both use it. */
+        private static boolean suppressionGate() {
+            return BarPixelPolicy.shouldSuppress(GestureConfigClient.isBarHiddenEnabled(),
+                    SystemHide.sConvertedHideActive, sShadeExpandedCache);
+        }
+
+        /**
+         * C3.4: the single writer that turns a target transparent. Order is fixed
+         * (idempotent guard -> read alpha -> record -> write 0) and the write runs
+         * inside our own window so the interceptor lets it through.
+         */
+        private static void zeroTarget(View target) {
+            if (target == null) return;
+            if (sRecordedAlpha.containsKey(target)) return;
+            float prev = target.getAlpha();
+            sRecordedAlpha.put(target, prev);
+            try {
+                sAlphaWriteTarget = target;
+                sModuleAlphaWrite = true;
+                target.setAlpha(0f);
+            } finally {
+                sModuleAlphaWrite = false;
+                sAlphaWriteTarget = null;
+            }
+        }
+
+        /**
+         * C7: the ONLY re-resolution entry point. Computes the candidates that were not
+         * in the target set BEFORE the merge (N49: that is the definition of "new"),
+         * merges them in place, and zeroes only the new ones.
+         */
+        private static void resolveSuppressTargets(View navBar) {
+            if (navBar == null) return;
+            Set<View> candidates = new HashSet<>();
+            collectCandidates(navBar, candidates);
+            Set<View> newOnes = new HashSet<>(candidates);
+            newOnes.removeAll(sSuppressTargets);
+            BarPixelPolicy.mergeInto(sSuppressTargets, candidates);
+            for (View target : newOnes) {
+                zeroTarget(target);
+            }
+            sTargetsResolved = true;
+        }
+
+        /** C3.2: admit siblings that pass the pure policy; containers never qualify. */
+        private static void collectCandidates(View root, Set<View> out) {
+            if (!(root instanceof ViewGroup)) return;
+            ViewGroup group = (ViewGroup) root;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View child = group.getChildAt(i);
+                if (child == null) continue;
+                boolean container = child instanceof ViewGroup;
+                if (BarPixelPolicy.admitsSibling(child.getClass().getName(),
+                        child.getVisibility() == View.VISIBLE, child.getAlpha(),
+                        child.getWidth(), child.getHeight(), container)) {
+                    out.add(child);
+                }
+                collectCandidates(child, out);
+            }
+        }
+
+        /**
+         * C3.5 / Z2: the ONLY restore entry point. Traversal, write-back and removal all
+         * run on the main thread; when the caller is elsewhere the WHOLE method is posted
+         * once (Z10: write-back and removal must share one runnable).
+         */
+        private static void restoreTargets() {
+            if (Looper.myLooper() != Looper.getMainLooper()) {
+                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                    @Override
+                    public void run() {
+                        restoreTargets();
+                    }
+                });
+                return;
+            }
+            List<View> snapshot = new ArrayList<>(sRecordedAlpha.keySet());
+            List<View> toDrop = new ArrayList<>();
+            for (View v : snapshot) {
+                if (suppressionGate()) continue;
+                Float rec = sRecordedAlpha.get(v);
+                if (rec == null) continue;
+                float out = BarPixelPolicy.alphaTarget(false, true, rec);
+                if (out < 0) continue;
+                try {
+                    sAlphaWriteTarget = v;
+                    sModuleAlphaWrite = true;
+                    v.setAlpha(out);
+                } finally {
+                    sModuleAlphaWrite = false;
+                    sAlphaWriteTarget = null;
+                }
+                if (BarPixelPolicy.restoreShouldDropRecord(suppressionGate(), true)) {
+                    toDrop.add(v);
+                }
+            }
+            dropTargets(toDrop);
+            sTargetsResolved = false;
+        }
+
+        /** Z7b: the ONLY place that drops records and set entries (after the loop). */
+        private static void dropTargets(List<View> toDrop) {
+            if (toDrop == null) return;
+            for (View v : toDrop) {
+                if (v == null) continue;
+                sRecordedAlpha.remove(v);
+                sSuppressTargets.remove(v);
+            }
+        }
+
+        /** C6: refresh the shade cache on a non-hot path and react to the transition. */
+        static void refreshShadeCache(View view) {
+            if (view == null) return;
+            sShadeExpandedCache = isShadeExpanded(view);
+            if (suppressionGate()) {
+                if (!sTargetsResolved) {
+                    log(4, "RESUPPRESS_SHADE suppression re-armed shadeExpanded="
+                            + sShadeExpandedCache);
+                }
+                sTargetsResolved = false;
+                resolveSuppressTargets(navBarAncestor(view));
+                scheduleShadeRecheck(view);
+            } else if (!sRecordedAlpha.isEmpty()) {
+                log(4, "RESTORE_SHADE suppression lifted shadeExpanded="
+                        + sShadeExpandedCache);
+                restoreTargets();
+                cancelShadeRecheck(view);
+            } else {
+                cancelShadeRecheck(view);
+            }
+        }
+
+        /** C6: refresh from any non-hot entry point that has no single handle at hand. */
+        static void refreshShadeForAll() {
+            View[] snapshot;
+            synchronized (sHandles) {
+                snapshot = sHandles.toArray(new View[0]);
+            }
+            for (View v : snapshot) {
+                if (v == null) continue;
+                try {
+                    refreshShadeCache(v);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+
+        /** C6: schedules the 5s recheck, at most one pending (never stacked). */
+        static void scheduleShadeRecheck(View view) {
+            if (view == null) return;
+            sShadeRecheckView = view;
+            if (sShadeRecheckPending) return;
+            sShadeRecheckPending = true;
+            view.postDelayed(SHADE_RECHECK, SHADE_RECHECK_MS);
+        }
+
+        /** C6: cancels the periodic recheck (restore path and detach hook). */
+        static void cancelShadeRecheck(View view) {
+            sShadeRecheckPending = false;
+            sShadeRecheckView = null;
+            if (view == null) return;
+            view.removeCallbacks(SHADE_RECHECK);
+        }
+
+        /** C7: re-resolve after a layout pass (sibling views may have been rebuilt). */
+        static void onHandleLaidOut(View view) {
+            if (view == null) return;
+            if (!suppressionGate()) return;
+            sTargetsResolved = false;
+            resolveSuppressTargets(navBarAncestor(view));
+        }
+
+        /** V6: detach must restore before it forgets the view. */
+        static void onHandleDetached(View view) {
+            cancelShadeRecheck(view);
+            try {
+                restoreTargets();
+            } catch (Throwable ignored) {
             }
         }
 
         private static void registerAlphaFallback(XposedModule module, Class<?> handle) {
+            if (sFallbackRegistered) return;
+            sFallbackRegistered = true;
             try {
                 Class<?> view = Class.forName("android.view.View", false,
                         handle.getClassLoader());
@@ -722,19 +1096,18 @@ public final class NavigationHandleHooks {
                 module.hook(method)
                         .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                         .intercept(chain -> {
-                            // Guard order matters: fast volatile read first,
-                            // then instanceof on the (already loaded) handle
-                            // class, both before any reflection.
-                            boolean moduleHide = GestureConfigClient.isBarHiddenEnabled();
-                            boolean sysConverted = SystemHide.sConvertedHideActive;
-                            if (!moduleHide && !sysConverted) {
+                            // Z21: our own write window is bound to ONE view. Anything
+                            // else (a listener or an animation writing a sibling) is not
+                            // ours and must be judged by the gate below.
+                            Object thiz = chain.getThisObject();
+                            if (sModuleAlphaWrite && thiz == sAlphaWriteTarget) {
                                 return chain.proceed();
                             }
-                            Object thiz = chain.getThisObject();
-                            if (thiz instanceof View
-                                    && !isShadeExpanded((View) thiz)
-                                    && handle.isInstance(thiz)) {
-                                return null; // skip the alpha change on the bar
+                            // Z23: the shade criterion is already the gate's third
+                            // argument, so this interceptor never reads the cache.
+                            boolean bar = handle.isInstance(thiz);
+                            if ((bar || sSuppressTargets.contains(thiz)) && suppressionGate()) {
+                                return chain.proceed(new Object[] { 0f });
                             }
                             return chain.proceed();
                         });
@@ -1090,18 +1463,115 @@ public final class NavigationHandleHooks {
 
         static void applyWidth(View v) {
             Integer dp = GestureConfigClient.getBarWidthDp();
-            if (dp == null) return; // untouched: leave the system width alone
+            if (dp == null) {
+                logWidth(v, null, -1, false);
+                return; // untouched: leave the system width alone
+            }
             int clamped = Math.max(BAR_WIDTH_MIN_DP, Math.min(BAR_WIDTH_MAX_DP, dp));
             int width = Math.round(clamped * density(v));
             ViewGroup.LayoutParams raw = v.getLayoutParams();
-            if (!(raw instanceof LinearLayout.LayoutParams)) return;
-            LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) raw;
-            if (lp.width == width && lp.gravity == Gravity.CENTER) return;
-            lp.width = width;
-            lp.gravity = Gravity.CENTER;
-            v.setLayoutParams(lp);
-            log(4, "HANDLE_WIDTH dp=" + clamped + " px=" + width
-                    + " from=" + (raw == null ? "?" : raw.width));
+            if (raw instanceof LinearLayout.LayoutParams) {
+                LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) raw;
+                if (lp.width == width && lp.gravity == Gravity.CENTER) {
+                    logWidth(v, clamped, width, false);
+                    return;
+                }
+                lp.width = width;
+                lp.gravity = Gravity.CENTER;
+                v.setLayoutParams(lp);
+                logWidth(v, clamped, width, true);
+                return;
+            }
+            if (raw instanceof FrameLayout.LayoutParams) {
+                FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) raw;
+                if (lp.width == width && lp.gravity == Gravity.CENTER) {
+                    logWidth(v, clamped, width, false);
+                    return;
+                }
+                lp.width = width;
+                lp.gravity = Gravity.CENTER;
+                v.setLayoutParams(lp);
+                logWidth(v, clamped, width, true);
+                return;
+            }
+            if (raw instanceof ViewGroup.MarginLayoutParams) {
+                // Generic parent: centre by margin. Idempotent on purpose - the target
+                // margin is derived from the parent width, never from the current
+                // margin, so repeated calls cannot accumulate an offset.
+                ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) raw;
+                int parentWidth = parentWidth(v);
+                if (parentWidth <= 0) {
+                    logWidth(v, clamped, width, false);
+                    logUnsupported(v, clamped, width, parentWidth);
+                    return;
+                }
+                int margin = (parentWidth - width) / 2;
+                if (lp.width == width && lp.leftMargin == margin) {
+                    logWidth(v, clamped, width, false);
+                    return;
+                }
+                lp.width = width;
+                lp.leftMargin = margin;
+                v.setLayoutParams(lp);
+                logWidth(v, clamped, width, true);
+                return;
+            }
+            logWidth(v, clamped, width, false);
+            logUnsupported(v, clamped, width, -1);
+        }
+
+        /**
+         * Probe-only: HANDLE_WIDTH dp= px= lpType= applied=. {@code applied} is false on
+         * every early return (config missing, unsupported layout params, already at the
+         * target width) -- the H3 diagnostic. Never touches layout state.
+         */
+        private static void logWidth(View v, Integer dp, int px, boolean applied) {
+            try {
+                ViewGroup.LayoutParams raw = v.getLayoutParams();
+                String lpType = raw == null ? "null" : raw.getClass().getName();
+                log(4, "HANDLE_WIDTH dp=" + dp + " px=" + px + " lpType=" + lpType
+                        + " applied=" + applied);
+            } catch (Throwable ignored) {
+                // Probe logging must never disturb the width application.
+            }
+        }
+
+        /** Probe-only: applyWidth could not place the configured width on this handle. */
+        private static void logUnsupported(View v, Integer dp, int px, int parentWidth) {
+            try {
+                ViewGroup.LayoutParams raw = v.getLayoutParams();
+                String lpType = raw == null ? "null" : raw.getClass().getName();
+                log(4, "HANDLE_WIDTH_UNSUPPORTED dp=" + dp + " px=" + px + " lpType=" + lpType
+                        + " parentW=" + parentWidth);
+            } catch (Throwable ignored) {
+                // Probe logging must never disturb the width application.
+            }
+        }
+
+        /** Parent width in px, or 0 when the parent is not a laid-out view. */
+        private static int parentWidth(View v) {
+            try {
+                ViewParent parent = v.getParent();
+                return parent instanceof View ? ((View) parent).getWidth() : 0;
+            } catch (Throwable ignored) {
+                return 0;
+            }
+        }
+
+        /**
+         * Probe-only: true when {@link #applyWidth} gives up on this handle (unsupported
+         * layout params, or a margin-based parent whose width is still unknown).
+         */
+        static boolean widthApplyGaveUp(View v) {
+            try {
+                ViewGroup.LayoutParams raw = v.getLayoutParams();
+                if (!(raw instanceof ViewGroup.MarginLayoutParams)) return true;
+                if (raw instanceof LinearLayout.LayoutParams) return false;
+                if (raw instanceof FrameLayout.LayoutParams) return false;
+                return parentWidth(v) <= 0;
+            } catch (Throwable ignored) {
+                return true;
+            }
         }
 
         static void applyVisibility(View v) {
@@ -1267,18 +1737,51 @@ public final class NavigationHandleHooks {
             }
         }
 
-        /** DOWN lands inside the bar horizontal range (with a small padding band). */
+        /**
+         * DOWN lands on the hint-bar band in screen space (C1/C2). Fail-closed: an
+         * unusable raw x or an unresolvable display width rejects the touch.
+         */
         static boolean isInBarRange(View handle, MotionEvent ev) {
+            float rawX = ev.getRawX();
+            float x = ev.getX();
+            boolean rawUsable = !(rawX == 0f && x > 0f);
+            android.util.DisplayMetrics metrics =
+                    android.content.res.Resources.getSystem().getDisplayMetrics();
+            int displayWidth = metrics.widthPixels;
+            int barDp = barWidthDp();
+            boolean in = BarBandPolicy.onBar(rawX, rawUsable, displayWidth, barDp, metrics.density);
             try {
-                int left = getIntField(handle, "viewScreenLeft", Integer.MIN_VALUE);
-                if (left == Integer.MIN_VALUE) return true;
-                float density = density(handle);
-                int pad = Math.round(MBACK_BAND_PADDING_DP * density);
-                int right = left + handle.getWidth();
-                float x = ev.getX();
-                return x >= left - pad && x <= right + pad;
-            } catch (Throwable t) {
-                return true; // fail-open to match coloros-mod: never block the bar
+                logBand(handle, rawX, x, rawUsable, displayWidth, barDp, metrics.density, in);
+            } catch (Throwable ignored) {
+                // Probe logging must never change the band decision.
+            }
+            return in;
+        }
+
+        /**
+         * Probe-only: MBACK_BAND / MBACK_LEFT_CHECK / MBACK_RAWX_UNUSABLE.
+         * {@code in} is the value the caller returns; this method decides nothing and
+         * never writes any state the band decision reads.
+         */
+        private static void logBand(View handle, float rawX, float x, boolean rawUsable,
+                int displayWidth, int barDp, float density, boolean in) {
+            int left = getIntField(handle, "viewScreenLeft", Integer.MIN_VALUE);
+            int width = handle.getWidth();
+            float center = BarBandPolicy.screenCenter(displayWidth);
+            float half = com.cos.lspit.gesture.config.SideGesturePolicy
+                    .barHalfWidthPx(barDp, density);
+            log(4, "MBACK_BAND rawX=" + rawX + " x=" + x + " w=" + width + " left=" + left
+                    + " dw=" + displayWidth + " center=" + center + " half=" + half
+                    + " in=" + in + " barDp=" + barDp);
+            if (left != Integer.MIN_VALUE && displayWidth > 0) {
+                // C1 cross-check: viewScreenLeft against the width-centred left edge
+                // applyWidth would produce; diff != 0 means the width never landed.
+                float centeredLeft = (displayWidth - width) / 2f;
+                log(4, "MBACK_LEFT_CHECK diff=" + (left - centeredLeft)
+                        + " applyWidthGaveUp=" + Appearance.widthApplyGaveUp(handle));
+            }
+            if (!rawUsable) {
+                log(4, "MBACK_RAWX_UNUSABLE");
             }
         }
 
@@ -1502,6 +2005,14 @@ public final class NavigationHandleHooks {
 
     private static float density(View v) {
         return v.getResources().getDisplayMetrics().density;
+    }
+
+    /**
+     * C1: configured hint-bar length in dp, defaulting to DEFAULT_BAR_DP. Never derived
+     * from {@code handle.getWidth()} (H5).
+     */
+    private static int barWidthDp() {
+        return BarBandPolicy.effectiveBarDp(GestureConfigClient.getBarWidthDp());
     }
 
     /** Reads an int field from the class hierarchy; returns fallback when missing. */

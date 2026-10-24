@@ -2,6 +2,7 @@ package com.cos.lspit.gesture.config;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -194,55 +195,310 @@ public class SideGesturePolicyTest {
                 DISPLAY_W, DISPLAY_H, true, 78, DENSITY));
     }
 
-    // --- Launcher home-gesture region narrow (barOnly) ---
+    // --- Launcher home-gesture region narrow (barOnly, C4 list-level) ---
+    //
+    // Geometry used below (measured device): display 1080x2376, density 2.75,
+    // BOTTOM_STRIP_H 66.  A sanity main band must contain cx=540 and satisfy
+    // bottom >= 2376-198 = 2178 with height <= 198.
+    // 40dp -> half = (40*2.75)/2 + 4*2.75 = 66 -> band [474, 606].
+    // 160dp -> half = 231 -> band [309, 771].
 
     @Test
     public void narrowFullWidthBandToDefault40Dp() {
-        // Full-width bottom strip [0..1080] -> 40dp band is 540 +-66 = 474..606.
-        float[] rect = {0f, 2310f, 1080f, 2376f};
-        assertTrue(SideGesturePolicy.narrowBandToBar(rect, 40, DENSITY));
-        assertEquals(474f, rect[0], 0.5f);
-        assertEquals(606f, rect[2], 0.5f);
-        // Vertical extent is untouched by the horizontal narrow.
-        assertEquals(2310f, rect[1], 0.5f);
-        assertEquals(2376f, rect[3], 0.5f);
+        // Main band [0,2310,1080,2376] contains the centre and sits on the bottom
+        // strip -> rule 1 narrows it to cx +-66. Vertical extent is untouched.
+        float[][] input = {{0f, 2310f, 1080f, 2376f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 40, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertTrue(result.applied);
+        assertEquals(1, result.rects.length);
+        assertEquals(474f, result.rects[0][0], 0.5f);
+        assertEquals(606f, result.rects[0][2], 0.5f);
+        assertEquals(2310f, result.rects[0][1], 0.5f);
+        assertEquals(2376f, result.rects[0][3], 0.5f);
+        // The input array is never mutated (the result carries a fresh copy).
+        assertEquals(0f, input[0][0], 0.5f);
+        assertEquals(1080f, input[0][2], 0.5f);
     }
 
     @Test
     public void narrowFullWidthBandToWidest160Dp() {
-        // 160dp band is 540 +-231 = 309..771.
-        float[] rect = {0f, 2310f, 1080f, 2376f};
-        assertTrue(SideGesturePolicy.narrowBandToBar(rect, 160, DENSITY));
-        assertEquals(309f, rect[0], 0.5f);
-        assertEquals(771f, rect[2], 0.5f);
+        float[][] input = {{0f, 2310f, 1080f, 2376f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 160, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertTrue(result.applied);
+        assertEquals(309f, result.rects[0][0], 0.5f);
+        assertEquals(771f, result.rects[0][2], 0.5f);
     }
 
     @Test
-    public void narrowOffCenterBandStaysCenteredOnItsOwnWidth() {
-        // A region already offset (e.g. another orientation) is centered on itself,
-        // not on the display center: 500..900 narrows symmetrically around 700.
-        float[] rect = {500f, 0f, 900f, 100f};
-        assertTrue(SideGesturePolicy.narrowBandToBar(rect, 40, DENSITY));
-        assertEquals(634f, rect[0], 0.5f);
-        assertEquals(766f, rect[2], 0.5f);
+    public void narrowOffCenterRectWithoutMainBandIsUntouched() {
+        // {500,0,900,100}: bottom 100 < 2178 -> NOT a sanity main band, so the whole
+        // region is skipped and every rect keeps its original coordinates.
+        float[][] input = {{500f, 0f, 900f, 100f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 40, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertFalse(result.applied);
+        assertEquals(0, result.narrowed);
+        assertEquals(500f, result.rects[0][0], 0.5f);
+        assertEquals(900f, result.rects[0][2], 0.5f);
     }
 
     @Test
-    public void narrowClampsToBandSmallerThanHintBand() {
-        // A 100px-wide band can never grow past its own edges.
-        float[] rect = {600f, 0f, 700f, 100f};
-        assertTrue(SideGesturePolicy.narrowBandToBar(rect, 160, DENSITY));
-        assertEquals(600f, rect[0], 0.5f);
-        assertEquals(700f, rect[2], 0.5f);
+    public void narrowSmallRectWithoutMainBandIsUntouched() {
+        float[][] input = {{600f, 0f, 700f, 100f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 160, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertFalse(result.applied);
+        assertEquals(600f, result.rects[0][0], 0.5f);
+        assertEquals(700f, result.rects[0][2], 0.5f);
     }
 
     @Test
-    public void narrowDegenerateBandReturnsFalse() {
-        // A zero-width region must report "cannot narrow" so the caller leaves it alone.
-        float[] rect = {540f, 0f, 540f, 100f};
-        assertFalse(SideGesturePolicy.narrowBandToBar(rect, 40, DENSITY));
-        assertEquals(540f, rect[0], 0.5f);
-        assertEquals(540f, rect[2], 0.5f);
+    public void narrowZeroWidthRectWithoutMainBandIsUntouched() {
+        float[][] input = {{540f, 0f, 540f, 100f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 40, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertFalse(result.applied);
+        assertEquals(540f, result.rects[0][0], 0.5f);
+        assertEquals(540f, result.rects[0][2], 0.5f);
+    }
+
+    @Test
+    public void narrowListNeverWidensCenteredRect() {
+        // A main band already narrower than the hint band (500..580) must NOT be
+        // widened to 474..606: the narrow only ever shrinks.
+        float[][] input = {{500f, 2310f, 580f, 2376f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 40, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertTrue(result.applied);
+        assertEquals(500f, result.rects[0][0], 0.5f);
+        assertEquals(580f, result.rects[0][2], 0.5f);
+    }
+
+    @Test
+    public void narrowListAppliesToMainBandOnly() {
+        // The main band is narrowed; the unrelated top rect (no vertical overlap) is
+        // kept byte for byte, so exactly one rect changed.
+        float[][] input = {
+                {0f, 2310f, 1080f, 2376f},
+                {600f, 0f, 700f, 100f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 40, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertTrue(result.applied);
+        assertEquals(474f, result.rects[0][0], 0.5f);
+        assertEquals(606f, result.rects[0][2], 0.5f);
+        assertEquals(600f, result.rects[1][0], 0.5f);
+        assertEquals(700f, result.rects[1][2], 0.5f);
+        assertEquals(0, result.folded);
+    }
+
+    @Test
+    public void narrowListKeepsNonOverlappingVerticalRect() {
+        // A wide rect that crosses the band horizontally but sits far above the main
+        // band (rule 3) is preserved untouched.
+        float[][] input = {
+                {0f, 2310f, 1080f, 2376f},
+                {0f, 300f, 1080f, 336f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 40, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertTrue(result.applied);
+        assertEquals(0f, result.rects[1][0], 0.5f);
+        assertEquals(1080f, result.rects[1][2], 0.5f);
+        assertEquals(300f, result.rects[1][1], 0.5f);
+        assertEquals(336f, result.rects[1][3], 0.5f);
+    }
+
+    @Test
+    public void narrowListFoldsCornerRectIntoMainBandExtent() {
+        // Right-corner rect (no horizontal intersection with the band) is folded into
+        // the main band extent: [max(main.left,cx-half), main.top, min(main.right,cx+half), main.bottom].
+        float[][] input = {
+                {0f, 2310f, 1080f, 2376f},
+                {700f, 2310f, 1080f, 2376f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 40, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertTrue(result.applied);
+        assertEquals(1, result.folded);
+        assertEquals(474f, result.rects[1][0], 0.5f);
+        assertEquals(2310f, result.rects[1][1], 0.5f);
+        assertEquals(606f, result.rects[1][2], 0.5f);
+        assertEquals(2376f, result.rects[1][3], 0.5f);
+        // The fold is unconditional: with a main band already clamped to the band, the
+        // fold target is byte-identical to that main band and is STILL written back
+        // (N21), not "de-duplicated away" and not left in the corner.
+        float[][] identical = {
+                {474f, 2310f, 606f, 2376f},
+                {100f, 2310f, 200f, 2376f}};
+        SideGesturePolicy.LauncherBandResult again =
+                SideGesturePolicy.narrowBandList(identical, 40, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertEquals(1, again.folded);
+        assertEquals(474f, again.rects[1][0], 0.5f);
+        assertEquals(606f, again.rects[1][2], 0.5f);
+        assertEquals(2, again.rects.length);
+    }
+
+    @Test
+    public void narrowListAllRectsOverlappingMainBandStayWithinBand() {
+        // C4 invariant over a mixed list: every rect that overlaps the main band
+        // vertically ends up horizontally inside [cx-half, cx+half].
+        float[][] input = {
+                {0f, 2310f, 1080f, 2376f},
+                {700f, 2310f, 1080f, 2376f},
+                {0f, 2310f, 380f, 2376f},
+                {300f, 2300f, 800f, 2376f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 40, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertTrue(result.applied);
+        float half = SideGesturePolicy.barHalfWidthPx(40, DENSITY);
+        float center = DISPLAY_W / 2f;
+        for (float[] rect : result.rects) {
+            assertEquals(center - half, rect[0], 0.5f);
+            assertEquals(center + half, rect[2], 0.5f);
+        }
+    }
+
+    @Test
+    public void narrowListAllowsDuplicateBands() {
+        // Two identical full-width bands: the list is never de-duplicated, so the
+        // length is preserved and BOTH get narrowed.
+        float[][] input = {
+                {0f, 2310f, 1080f, 2376f},
+                {0f, 2310f, 1080f, 2376f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 40, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertTrue(result.applied);
+        assertEquals(2, result.rects.length);
+        assertEquals(474f, result.rects[0][0], 0.5f);
+        assertEquals(606f, result.rects[0][2], 0.5f);
+        assertEquals(474f, result.rects[1][0], 0.5f);
+        assertEquals(606f, result.rects[1][2], 0.5f);
+        assertEquals(2, result.narrowed);
+    }
+
+    @Test
+    public void narrowListThinCornerRectLeavesBand() {
+        // N8-d synthetic geometry: density 0.1 / barWidthDp 1 -> half = 0.45, i.e. the
+        // whole band is narrower than MIN_BAND_PX. Rule 6 then collapses the corner
+        // rect onto the main band itself instead of leaving it outside the band.
+        float[][] input = {
+                {0f, 2310f, 1080f, 2376f},
+                {900f, 2310f, 1080f, 2376f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 1, 0.1f, DISPLAY_W, DISPLAY_H);
+        assertTrue(result.applied);
+        assertEquals(1, result.folded);
+        // The corner rect is folded to the main band, never left in the corner.
+        assertEquals(result.rects[0][0], result.rects[1][0], 0f);
+        assertEquals(result.rects[0][2], result.rects[1][2], 0f);
+        assertEquals(2310f, result.rects[1][1], 0.5f);
+        assertEquals(2376f, result.rects[1][3], 0.5f);
+        // The degenerate fold target is not zero-width (it collapses to the main band).
+        assertTrue(result.rects[1][2] - result.rects[1][0] > 0f);
+    }
+
+    @Test
+    public void narrowListSkipsWhenNoSanityMainBand() {
+        // No rect contains the centre on the bottom strip -> applied=false, nothing moves.
+        float[][] input = {
+                {0f, 300f, 1080f, 336f},
+                {0f, 2310f, 200f, 2376f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 40, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertFalse(result.applied);
+        assertEquals(0, result.folded);
+        assertEquals(0, result.narrowed);
+        assertEquals(2, result.rects.length);
+        assertEquals(0f, result.rects[0][0], 0.5f);
+        assertEquals(1080f, result.rects[0][2], 0.5f);
+        assertEquals(200f, result.rects[1][2], 0.5f);
+        // Same skip for a null list, a zero bar width and a non-positive half.
+        assertFalse(SideGesturePolicy.narrowBandList(null, 40, DENSITY, DISPLAY_W, DISPLAY_H)
+                .applied);
+        float[][] band = {{0f, 2310f, 1080f, 2376f}};
+        assertFalse(SideGesturePolicy.narrowBandList(band, 0, DENSITY, DISPLAY_W, DISPLAY_H)
+                .applied);
+        assertFalse(SideGesturePolicy.narrowBandList(band, 40, 0f, DISPLAY_W, DISPLAY_H)
+                .applied);
+        assertFalse(SideGesturePolicy.narrowBandList(band, 40, DENSITY, 0, DISPLAY_H)
+                .applied);
+    }
+
+    @Test
+    public void narrowListNeverTurnsPositiveWidthIntoZero() {
+        // A main band narrower than the hint band keeps its width (rule 1 guard) and a
+        // thin intersecting rect keeps a positive width too.
+        float[][] input = {
+                {530f, 2310f, 570f, 2376f},
+                {520f, 2310f, 560f, 2376f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 40, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertTrue(result.applied);
+        assertEquals(530f, result.rects[0][0], 0.5f);
+        assertEquals(570f, result.rects[0][2], 0.5f);
+        for (float[] rect : result.rects) {
+            assertTrue(rect[2] - rect[0] > 0f);
+        }
+    }
+
+    @Test
+    public void narrowListHandlesNullPlaceholders() {
+        // Non-RectF list elements arrive as null: same length, same order, null kept.
+        float[][] input = {
+                null,
+                {0f, 2310f, 1080f, 2376f},
+                null,
+                {700f, 2310f, 1080f, 2376f}};
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 40, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertTrue(result.applied);
+        assertEquals(4, result.rects.length);
+        assertNull(result.rects[0]);
+        assertNull(result.rects[2]);
+        assertEquals(474f, result.rects[1][0], 0.5f);
+        assertEquals(606f, result.rects[1][2], 0.5f);
+        assertEquals(474f, result.rects[3][0], 0.5f);
+        assertEquals(1, result.folded);
+    }
+
+    @Test
+    public void resultRectsDoNotCoverCorner() {
+        // Regression detector for S3: the realistic list has both R-corner and L-corner
+        // rects. Before the narrow the corner is covered with a positive width
+        // (coversCorner == false); after C4 it is not (coversCorner == true).
+        float[][] input = {
+                {0f, 2310f, 1080f, 2376f},
+                {900f, 2310f, 1080f, 2376f},
+                {0f, 2310f, 180f, 2376f}};
+        float half = SideGesturePolicy.barHalfWidthPx(40, DENSITY);
+        float[] originalMain = {0f, 2310f, 1080f, 2376f};
+        assertFalse(SideGesturePolicy.coversCorner(input, originalMain, half, DISPLAY_W));
+        SideGesturePolicy.LauncherBandResult result =
+                SideGesturePolicy.narrowBandList(input, 40, DENSITY, DISPLAY_W, DISPLAY_H);
+        assertTrue(result.applied);
+        assertTrue(SideGesturePolicy.coversCorner(
+                result.rects, result.rects[0], half, DISPLAY_W));
+    }
+
+    @Test
+    public void cornerCoverageIgnoresZeroWidthTouch() {
+        // V3: touching endpoints is NOT an intersection, so a zero-width rect at the
+        // corner boundary is still "covered"; a positive-width overlap is not.
+        float half = SideGesturePolicy.barHalfWidthPx(40, DENSITY);
+        float[] mainBand = {474f, 2310f, 606f, 2376f};
+        float[][] zeroWidth = {
+                {474f, 2310f, 606f, 2376f},
+                {606f, 2310f, 606f, 2376f}};
+        assertTrue(SideGesturePolicy.coversCorner(zeroWidth, mainBand, half, DISPLAY_W));
+        float[][] positiveWidth = {
+                {474f, 2310f, 606f, 2376f},
+                {606f, 2310f, 700f, 2376f}};
+        assertFalse(SideGesturePolicy.coversCorner(positiveWidth, mainBand, half, DISPLAY_W));
+        // A corner rect that does not overlap the main band vertically is irrelevant.
+        float[][] otherRow = {
+                {474f, 2310f, 606f, 2376f},
+                {900f, 300f, 1080f, 336f}};
+        assertTrue(SideGesturePolicy.coversCorner(otherRow, mainBand, half, DISPLAY_W));
     }
 
     @Test

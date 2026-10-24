@@ -13,7 +13,9 @@ import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Launcher-side barOnly gate. The whole ColorOS bottom gesture region
@@ -49,6 +51,10 @@ public final class LauncherRegionHooker {
     private static final String NAV_CONTROLLER = "com.oplus.quickstep.navigation.NavigationController";
     private static final String NAV_REFRESH_METHOD = "updateTouchRegion";
     private static final long REFRESH_DEBOUNCE_MS = 400L;
+    /** Probe-only cap: REGION_DUMP fires at most this many times per region name. */
+    private static final int REGION_DUMP_LIMIT = 3;
+    /** Per-name REGION_DUMP counter; a plain map, never a time-based throttle. */
+    private static final Map<String, Integer> sRegionDumpCounts = new HashMap<>();
 
     private static ClassLoader moduleClassLoader;
     /**
@@ -105,15 +111,24 @@ public final class LauncherRegionHooker {
             Object nameArg = chain.getArg(0);
             if (nameArg instanceof String) {
                 String regionName = (String) nameArg;
-                if (regionName.startsWith(REGION_PREFIX) && armed()) {
-                    Object listArg = chain.getArg(1);
-                    if (listArg instanceof List) {
-                        int narrowed = 0;
-                        for (Object element : (List<?>) listArg) {
-                            if (element instanceof RectF && narrow((RectF) element)) narrowed++;
-                        }
-                        log(module, 4, "REGION_NARROW " + regionName
-                                + " rects=" + narrowed + " barDp=" + barWidthDp());
+                Object listArg = null;
+                try {
+                    listArg = chain.getArg(1);
+                } catch (Throwable ignored) {
+                    // Probe logging must never disturb region registration.
+                }
+                List<?> regionList = listArg instanceof List ? (List<?>) listArg : null;
+                boolean armed = armed();
+                try {
+                    dumpRegion(module, regionName, regionList, armed);
+                } catch (Throwable ignored) {
+                    // Probe logging must never disturb region registration.
+                }
+                if (regionName.startsWith(REGION_PREFIX) && armed && regionList != null) {
+                    try {
+                        narrowRegion(module, regionName, regionList);
+                    } catch (Throwable ignored) {
+                        // A narrowing failure must never block the original registration.
                     }
                 }
             }
@@ -134,18 +149,106 @@ public final class LauncherRegionHooker {
         return dp == null ? SideGesturePolicy.DEFAULT_BAR_DP : dp;
     }
 
-    /** Narrows a home-gesture rect horizontally to the hint-bar band; true when applied. */
-    private static boolean narrow(RectF rect) {
-        try {
-            float density = Resources.getSystem().getDisplayMetrics().density;
-            float[] band = {rect.left, rect.top, rect.right, rect.bottom};
-            if (!SideGesturePolicy.narrowBandToBar(band, barWidthDp(), density)) return false;
-            rect.left = band[0];
-            rect.right = band[2];
-            return true;
-        } catch (Throwable ignored) {
-            return false;
+    /**
+     * C4: narrows the whole registered region list (never a single rect).
+     *
+     * <p>The launcher list may hold non-{@code RectF} elements; they are passed to the
+     * policy as {@code null} placeholders and are never written back, so the list keeps
+     * its length and order (no additions, removals or de-duplication).
+     */
+    private static void narrowRegion(XposedModule module, String regionName, List<?> regionList) {
+        android.util.DisplayMetrics metrics = Resources.getSystem().getDisplayMetrics();
+        int size = regionList.size();
+        float[][] bands = new float[size][];
+        for (int i = 0; i < size; i++) {
+            Object element = regionList.get(i);
+            if (element instanceof RectF) {
+                RectF rect = (RectF) element;
+                bands[i] = new float[] {rect.left, rect.top, rect.right, rect.bottom};
+            }
         }
+        SideGesturePolicy.LauncherBandResult result = SideGesturePolicy.narrowBandList(
+                bands, barWidthDp(), metrics.density, metrics.widthPixels, metrics.heightPixels);
+        try {
+            if (!result.applied) {
+                log(module, 4, "REGION_SKIP name=" + regionName + " reason=no-sanity-main-band");
+                return;
+            }
+        } catch (Throwable ignored) {
+            // Probe logging must never disturb region registration.
+        }
+        int written = 0;
+        int sizeOut = result.rects == null ? 0 : result.rects.length;
+        for (int i = 0; i < sizeOut && i < size; i++) {
+            float[] band = result.rects[i];
+            if (band == null) continue;                       // null placeholder: skipped
+            Object element = regionList.get(i);
+            if (!(element instanceof RectF)) continue;
+            RectF rect = (RectF) element;
+            float[] orig = bands[i];
+            rect.left = band[0];
+            rect.top = band[1];
+            rect.right = band[2];
+            rect.bottom = band[3];
+            written++;
+            try {
+                logRect(module, regionName, orig, band, metrics);
+            } catch (Throwable ignored) {
+                // Probe logging must never change the narrowing decision above.
+            }
+        }
+        try {
+            log(module, 4, "REGION_NARROW " + regionName + " rects=" + written
+                    + " folded=" + result.folded + " narrowed=" + result.narrowed
+                    + " barDp=" + barWidthDp() + " half="
+                    + SideGesturePolicy.barHalfWidthPx(barWidthDp(), metrics.density));
+            if (written == 0) {
+                log(module, 4, "REGION_SKIP name=" + regionName + " reason=no-rect-written");
+            }
+        } catch (Throwable ignored) {
+            // Probe logging must never disturb region registration.
+        }
+    }
+
+    /**
+     * Probe-only: {@code REGION_NARROWED} for a rect that stayed inside the band and
+     * {@code REGION_COLLAPSE} for one that sat entirely outside it (the C4 rule-4 fold
+     * candidates; after Task 3 they are folded into the main band instead of being
+     * re-centred on their own width).
+     */
+    private static void logRect(XposedModule module, String regionName, float[] orig,
+            float[] now, android.util.DisplayMetrics metrics) {
+        float half = SideGesturePolicy.barHalfWidthPx(barWidthDp(), metrics.density);
+        float center = metrics.widthPixels / 2f;
+        String origText = "[" + orig[0] + "," + orig[1] + "," + orig[2] + "," + orig[3] + "]";
+        String nowText = "[" + now[0] + "," + now[1] + "," + now[2] + "," + now[3] + "]";
+        if (orig[2] <= center - half || orig[0] >= center + half) {
+            log(module, 4, "REGION_COLLAPSE name=" + regionName + " orig=" + origText
+                    + " new=" + nowText + " usedW=" + (now[2] - now[0])
+                    + " usedH=" + (now[3] - now[1]));
+        } else {
+            log(module, 4, "REGION_NARROWED name=" + regionName + " orig=" + origText
+                    + " new=" + nowText);
+        }
+    }
+
+    /** Probe-only rect list rendering: {@code [l,t,r,b|l,t,r,b]}. */
+    private static String rectListText(List<?> regionList) {
+        if (regionList == null) return "null";
+        StringBuilder out = new StringBuilder("[");
+        boolean first = true;
+        for (Object element : regionList) {
+            if (!first) out.append('|');
+            first = false;
+            if (element instanceof RectF) {
+                RectF rect = (RectF) element;
+                out.append(rect.left).append(',').append(rect.top).append(',')
+                        .append(rect.right).append(',').append(rect.bottom);
+            } else {
+                out.append(element == null ? "null" : "?");
+            }
+        }
+        return out.append(']').toString();
     }
 
     /** Debounced re-registration trigger: launcher recomputes + re-registers the region. */

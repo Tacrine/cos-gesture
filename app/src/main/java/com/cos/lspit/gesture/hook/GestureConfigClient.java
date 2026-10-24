@@ -2,6 +2,7 @@ package com.cos.lspit.gesture.hook;
 
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.database.ContentObserver;
 import android.database.Cursor;
 import android.net.Uri;
@@ -49,6 +50,11 @@ public final class GestureConfigClient {
     private static volatile boolean slowRetryAnnounced;
     /** Guards the single lazy registration of the background observer thread. */
     private static volatile boolean observerStarted;
+    /** Host-process private snapshot cache: written on every successful refresh, read
+     *  back once (lazily) when the module provider is not warm yet (H4). */
+    private static final String CACHE_PREFS = "cos16_gesture_snapshot";
+    /** Guards the single lazy cache restore; cfg thread only. */
+    private static volatile boolean cacheLoaded;
 
     /** Main-looper handler for listener notification; lazily created once. */
     private static volatile Handler sMainHandler;
@@ -177,6 +183,9 @@ public final class GestureConfigClient {
             // barOnly actually arm; a dead silent return here used to leave
             // them at their defaults until a later config change fired the
             // observer.
+            // H4: until the provider answers, fall back to this process's last
+            // known snapshot so a late config cannot leave mBack dead.
+            loadCachedSnapshot(context);
             retryOrFail("provider-not-ready");
             return;
         }
@@ -240,6 +249,7 @@ public final class GestureConfigClient {
                                 + " barOnly=" + barOnlyEnabled
                                 + " hintTapShield=" + hintTapShieldEnabled
                                 + " barHidden=" + barHiddenEnabled);
+                writeCachedSnapshot(context);
                 notifyListeners();
             return true;
         } catch (Throwable failure) {
@@ -247,6 +257,69 @@ public final class GestureConfigClient {
             Log.w(TAG, "CONFIG_REFRESH_FAILED " + failure);
             return false;
         }
+    }
+
+    /**
+     * Persists the current snapshot into this process's private prefs (best effort).
+     * Runs on the cfg thread, right after the volatile snapshot was updated.
+     */
+    private static void writeCachedSnapshot(Context context) {
+        try {
+            SharedPreferences.Editor editor = context
+                    .getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE).edit();
+            editor.putBoolean("master", masterEnabled);
+            editor.putBoolean("left", leftEnabled);
+            editor.putBoolean("right", rightEnabled);
+            editor.putBoolean("mback", mbackEnabled);
+            editor.putInt("barWidthDp", barWidthDp == null ? -1 : barWidthDp);
+            editor.putBoolean("barOnly", barOnlyEnabled);
+            editor.putBoolean("hintTapShield", hintTapShieldEnabled);
+            editor.putBoolean("barHidden", barHiddenEnabled);
+            editor.apply();
+        } catch (Throwable failure) {
+            Log.w(TAG, "CONFIG_CACHE_WRITE_FAILED " + failure);
+        }
+    }
+
+    /**
+     * Lazily restores the last successful snapshot from this process's private prefs
+     * (H4). Deliberately cfg-thread only: it writes the same volatile snapshot the
+     * retry loop owns, so reading it from a hook thread would race the first refresh.
+     *
+     * @return true when a cached snapshot was applied.
+     */
+    private static boolean loadCachedSnapshot(Context context) {
+        if (cacheLoaded) return false;
+        if (!onCfgThread()) return false;
+        cacheLoaded = true;
+        try {
+            SharedPreferences prefs =
+                    context.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE);
+            if (!prefs.contains("master")) return false;
+            masterEnabled = prefs.getBoolean("master", masterEnabled);
+            leftEnabled = prefs.getBoolean("left", leftEnabled);
+            rightEnabled = prefs.getBoolean("right", rightEnabled);
+            mbackEnabled = prefs.getBoolean("mback", mbackEnabled);
+            int cachedWidth = prefs.getInt("barWidthDp", -1);
+            if (cachedWidth > 0) barWidthDp = cachedWidth;
+            barOnlyEnabled = prefs.getBoolean("barOnly", barOnlyEnabled);
+            hintTapShieldEnabled = prefs.getBoolean("hintTapShield", hintTapShieldEnabled);
+            barHiddenEnabled = prefs.getBoolean("barHidden", barHiddenEnabled);
+            Log.i(TAG, "CONFIG_CACHE_RESTORED master=" + masterEnabled
+                    + " mback=" + mbackEnabled + " barWidthDp=" + barWidthDp
+                    + " barOnly=" + barOnlyEnabled + " barHidden=" + barHiddenEnabled);
+            notifyListeners();
+            return true;
+        } catch (Throwable failure) {
+            Log.w(TAG, "CONFIG_CACHE_RESTORE_FAILED " + failure);
+            return false;
+        }
+    }
+
+    /** True when the caller runs on the dedicated cfg thread. */
+    private static boolean onCfgThread() {
+        Handler handler = sCfgHandler;
+        return handler != null && Looper.myLooper() == handler.getLooper();
     }
 
     private static void notifyListeners() {
