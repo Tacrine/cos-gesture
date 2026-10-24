@@ -72,7 +72,22 @@ jobs:
             echo "installed: $1"
           }
 
-          install_pkg "platforms;android-37"
+          # The SDK repository publishes no bare "platforms;android-37" package,
+          # only android-37.0/37.1/37.2. Try them newest-first and hard-fail
+          # when none of them is available.
+          PLATFORM_OK=0
+          for p in "platforms;android-37.2" "platforms;android-37.1" "platforms;android-37.0"; do
+            if sdkmanager "$p" >/dev/null 2>&1; then
+              echo "installed: $p"
+              PLATFORM_OK=1
+              break
+            fi
+          done
+          if [ "${PLATFORM_OK:-0}" != 1 ]; then
+            echo "::error title=SDK install failed::no android-37.x platform available"
+            exit 1
+          fi
+
           install_pkg "platform-tools"
 
           # A failing listing is a real error; only an empty grep match is
@@ -90,6 +105,11 @@ jobs:
             echo "::warning title=build-tools 37.x unavailable::installing $BTANY instead"
             install_pkg "$BTANY"
           fi
+
+      - name: Show installed SDK platforms
+        run: |
+          ls -1 "$ANDROID_HOME/platforms" || true
+          cat "$ANDROID_HOME/platforms/android-37"*/source.properties 2>/dev/null || true
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
