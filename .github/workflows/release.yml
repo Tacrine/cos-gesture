@@ -1,0 +1,327 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version as X.Y.Z (no leading v), e.g. 1.2.3"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark the GitHub Release as a pre-release"
+        required: false
+        default: false
+        type: boolean
+
+# Needed to create the GitHub Release and upload the APK asset.
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build release APK and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Optional release signing material. When KEYSTORE_BASE64 is absent the
+      # build falls back to the debug signing config (see app/build.gradle.kts).
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK tools
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK platform 37 and build-tools
+        run: |
+          set -uo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+          install_pkg() {
+            if ! sdkmanager "$1" >/dev/null; then
+              echo "::error title=SDK install failed::sdkmanager could not install $1"
+              return 1
+            fi
+            echo "installed: $1"
+          }
+
+          install_pkg "platforms;android-37"
+          install_pkg "platform-tools"
+
+          AVAILABLE="$(sdkmanager --list 2>/dev/null || true)"
+          BT37="$(printf '%s\n' "$AVAILABLE" | grep -oE 'build-tools;37\.[0-9.]+' | sort -uV | tail -n 1 || true)"
+          if [ -n "$BT37" ]; then
+            install_pkg "$BT37"
+          else
+            BTANY="$(printf '%s\n' "$AVAILABLE" | grep -oE 'build-tools;[0-9.]+' | sort -uV | tail -n 1 || true)"
+            if [ -z "$BTANY" ]; then
+              echo "::error title=SDK install failed::no build-tools package found in the SDK repository"
+              exit 1
+            fi
+            echo "::warning title=build-tools 37.x unavailable::installing $BTANY instead"
+            install_pkg "$BTANY"
+          fi
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # gradlew is tracked without the executable bit.
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # Derives versionName and versionCode from the tag (or the manual input):
+      #   v1.2.3 -> versionName 1.2.3, versionCode 1*10000 + 2*100 + 3 = 10203
+      - name: Resolve version
+        id: ver
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            RAW="${INPUT_VERSION:-}"
+          else
+            RAW="${REF_NAME:-}"
+          fi
+
+          VERSION="${RAW#v}"
+          if ! [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error title=Bad version::'$RAW' is not vX.Y.Z or X.Y.Z (three numeric components required)"
+            exit 1
+          fi
+
+          MAJOR="${BASH_REMATCH[1]}"
+          MINOR="${BASH_REMATCH[2]}"
+          PATCH="${BASH_REMATCH[3]}"
+
+          if [ "$MINOR" -gt 99 ] || [ "$PATCH" -gt 99 ]; then
+            echo "::error title=Bad version::minor and patch must be 0-99 for the versionCode formula"
+            exit 1
+          fi
+          VERSION_CODE=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "${INPUT_PRERELEASE:-false}" = "true" ]; then
+            PRERELEASE="true"
+          else
+            PRERELEASE="false"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "resolved version=$VERSION versionCode=$VERSION_CODE prerelease=$PRERELEASE"
+
+      # Optional: decode a base64 PKCS12/JKS keystore into the runner temp dir.
+      # Nothing is written into the repository.
+      - name: Decode release keystore
+        if: ${{ env.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_TMP: ${{ runner.temp }}/release.keystore
+        run: |
+          set -euo pipefail
+          for name in KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error title=Incomplete signing secrets::KEYSTORE_BASE64 is set but $name is empty"
+              exit 1
+            fi
+          done
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode --ignore-garbage > "$KEYSTORE_TMP"
+          if [ ! -s "$KEYSTORE_TMP" ]; then
+            echo "::error title=Keystore decode failed::decoded keystore is empty"
+            exit 1
+          fi
+          echo "KEYSTORE_FILE=$KEYSTORE_TMP" >> "$GITHUB_ENV"
+          echo "release keystore decoded to $KEYSTORE_TMP"
+
+      - name: Report signing mode
+        id: signing
+        run: |
+          set -euo pipefail
+          if [ -n "${KEYSTORE_FILE:-}" ]; then
+            echo "mode=release keystore (from repository secrets)" >> "$GITHUB_OUTPUT"
+            echo "signed=release" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning title=No release keystore::Falling back to the debug signing config; the APK is installable but not suitable as a long-term signed release."
+            echo "mode=debug keystore (no release secrets configured)" >> "$GITHUB_OUTPUT"
+            echo "signed=debug" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release APK
+        run: >-
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace
+          -PversionCode=${{ steps.ver.outputs.version_code }}
+          -PversionName=${{ steps.ver.outputs.version }}
+
+      # Guard against publishing an APK that cannot be installed.
+      - name: Verify APK is signed
+        id: apk
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          APKS=(app/build/outputs/apk/release/*.apk)
+          if [ ${#APKS[@]} -eq 0 ]; then
+            echo "::error title=No APK produced::app/build/outputs/apk/release contained no .apk file"
+            exit 1
+          fi
+
+          APK="${APKS[0]}"
+          echo "built apk: $APK"
+
+          case "$APK" in
+            *-unsigned.apk)
+              echo "::error title=Unsigned APK::$APK is unsigned, users cannot install it. Check the signing configuration (KEYSTORE_* secrets or the debug signing fallback)."
+              exit 1
+              ;;
+          esac
+
+          APKSIGNER=""
+          while IFS= read -r candidate; do
+            APKSIGNER="$candidate"
+          done < <(ls -1 "${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}/build-tools"/*/apksigner 2>/dev/null | sort -V | tail -n 1)
+          if [ -n "$APKSIGNER" ]; then
+            echo "$APKSIGNER verify --print-certs $APK"
+            "$APKSIGNER" verify --print-certs "$APK" || {
+              echo "::error title=APK signature invalid::apksigner verify failed for $APK"
+              exit 1
+            }
+          else
+            echo "::warning title=apksigner missing::could not run apksigner verify"
+          fi
+
+          mkdir -p dist
+          ASSET="dist/cos-gesture-${VERSION}.apk"
+          cp "$APK" "$ASSET"
+          SIZE_BYTES="$(stat -c %s "$ASSET")"
+          SIZE_MB="$(awk "BEGIN { printf \"%.1f\", $SIZE_BYTES / 1048576 }")"
+          SHA256="$(sha256sum "$ASSET" | awk '{ print $1 }')"
+
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+          echo "size_bytes=$SIZE_BYTES" >> "$GITHUB_OUTPUT"
+          echo "size_mb=$SIZE_MB" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "asset name: $ASSET ($SIZE_MB MiB, sha256 $SHA256)"
+
+      - name: Write release notes
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION_CODE: ${{ steps.ver.outputs.version_code }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
+          SIGNED_WITH: ${{ steps.signing.outputs.signed }}
+          ASSET: ${{ steps.apk.outputs.asset }}
+          SIZE_MB: ${{ steps.apk.outputs.size_mb }}
+          SHA256: ${{ steps.apk.outputs.sha256 }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ASSET_NAME="$(basename "$ASSET")"
+
+          if [ "$SIGNED_WITH" = "release" ]; then
+            SIGNING_TEXT="由仓库 Secrets 提供的 release keystore 签名。"
+            UPGRADE_TEXT="可覆盖安装此前同样用该 release keystore 签名的版本。"
+          else
+            SIGNING_TEXT="**由 debug keystore 签名**（仓库未配置 release 签名 Secrets）。APK 可正常安装，但不适合作为长期分发的正式签名。"
+            UPGRADE_TEXT="若此前安装的是用其它签名（例如别的 CI 生成的 debug 签名）构建的同包名版本，需先卸载再安装；卸载会清除模块配置。"
+          fi
+
+          BT='`'
+          {
+            echo "## COS Gesture $TAG"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| 版本 | ${BT}$VERSION${BT} |"
+            echo "| versionCode | ${BT}$VERSION_CODE${BT} |"
+            echo "| 构建 commit | ${BT}$COMMIT_SHA${BT} |"
+            echo "| 签名状态 | $SIGNING_TEXT |"
+            echo "| 产物 | ${BT}$ASSET_NAME${BT} ($SIZE_MB MiB) |"
+            echo "| SHA-256 | ${BT}$SHA256${BT} |"
+            echo ""
+            echo "### 安装 / 升级"
+            echo ""
+            echo "1. 下载 ${BT}$ASSET_NAME${BT} 并安装到设备。"
+            echo "2. 在 LSPosed 管理器中启用模块，作用域勾选 ${BT}com.android.systemui${BT} 与 ${BT}com.android.launcher${BT}。"
+            echo "3. 重启 SystemUI（模块内提供一键按钮，或 ${BT}su -c killall com.android.systemui${BT}）。"
+            echo "4. $UPGRADE_TEXT"
+            echo ""
+            echo "适用范围：ColorOS 16 / Android 16 真机。由 [${BT}$REPO${BT}](https://github.com/$REPO) 的 ${BT}.github/workflows/release.yml${BT} 自动构建。"
+          } > dist/release-notes.md
+
+          cat dist/release-notes.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          body_path: dist/release-notes.md
+          files: ${{ steps.apk.outputs.asset }}
+          prerelease: ${{ steps.ver.outputs.prerelease }}
+          fail_on_unmatched_files: true
+
+      - name: Write job summary
+        if: always()
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION_CODE: ${{ steps.ver.outputs.version_code }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          PRERELEASE: ${{ steps.ver.outputs.prerelease }}
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
+          ASSET: ${{ steps.apk.outputs.asset }}
+          SIZE_MB: ${{ steps.apk.outputs.size_mb }}
+          SHA256: ${{ steps.apk.outputs.sha256 }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          BT='`'
+          {
+            echo "### COS Gesture release"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| 版本 | ${BT}${VERSION:-n/a}${BT} |"
+            echo "| versionCode | ${BT}${VERSION_CODE:-n/a}${BT} |"
+            echo "| tag | ${BT}${TAG:-n/a}${BT} |"
+            echo "| pre-release | ${BT}${PRERELEASE:-n/a}${BT} |"
+            echo "| 签名 | ${SIGNING_MODE:-n/a} |"
+            echo "| commit | ${BT}$COMMIT_SHA${BT} |"
+            echo "| APK | ${BT}${ASSET:-n/a}${BT} |"
+            echo "| 大小 | ${SIZE_MB:-n/a} MiB |"
+            echo "| SHA-256 | ${BT}${SHA256:-n/a}${BT} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: dist/*.apk
+          if-no-files-found: warn
+          retention-days: 14

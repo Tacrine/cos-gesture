@@ -36,7 +36,7 @@
 
 ## 安装
 
-1. 在 [Releases](../../releases) 下载最新 `app-release.apk`
+1. 在 [Releases](../../releases) 下载最新 `cos-gesture-<版本号>.apk`（例如 `cos-gesture-1.2.3.apk`）
 2. 安装到设备，授予必要权限
 3. 在 LSPosed 管理器中启用模块，作用域勾选 `com.android.systemui` 与 `com.android.launcher`
 4. 重启 SystemUI（模块内提供一键按钮，或 `su -c killall com.android.systemui`）
@@ -56,6 +56,24 @@ gradlew.bat :app:testDebugUnitTest :app:assembleDebug
 - **Android SDK**：platform-36、build-tools 36.0.0。
 - **`local.properties`** 中 SDK 路径必须用正斜杠：`sdk.dir=C:/Users/...`（反斜杠会被
   `java.util.Properties` 吞掉）。
+
+## CI / Release
+
+仓库使用两条 GitHub Actions 工作流（`.github/workflows/`）：
+
+| 工作流 | 触发 | 作用 |
+|--------|------|------|
+| `ci.yml` | push（所有分支）、Pull Request、手动 | 执行 `:app:testDebugUnitTest` + `:app:assembleDebug`，失败时上传测试报告与构建日志 |
+| `release.yml` | 推送 `v*` tag、手动 `workflow_dispatch` | 构建 release APK 并自动发布 GitHub Release |
+
+版本号从 tag 推导：`v1.2.3` → `versionName=1.2.3`，
+`versionCode = major*10000 + minor*100 + patch`（即 `10203`）。手动触发时可填 `X.Y.Z` 并勾选是否标为预发布。
+
+Release 产物名为 `cos-gesture-<version>.apk`（AGP 默认输出的是 `app-release.apk` / `app-release-unsigned.apk`，工作流会重命名后再上传）。
+
+**签名**：若仓库配置了 `KEYSTORE_BASE64`、`KEYSTORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD` 四个 Secrets，
+则用该 keystore 签名；未配置时回退到 debug 签名（产物仍可安装，但不适合作为长期分发的正式签名）。
+Release 正文会写明本次的签名状态。
 
 ## 验证状态
 
