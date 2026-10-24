@@ -251,6 +251,23 @@ public final class LauncherRegionHooker {
         return out.append(']').toString();
     }
 
+    /**
+     * Probe-only: logs the region list exactly as the launcher registered it, capped at
+     * {@link #REGION_DUMP_LIMIT} lines per region name. Purely diagnostic; the list is
+     * never modified and the narrowing decision below is unaffected.
+     */
+    private static void dumpRegion(XposedModule module, String regionName, List<?> regionList,
+            boolean armed) {
+        if (regionList == null) return;
+        synchronized (sRegionDumpCounts) {
+            Integer seen = sRegionDumpCounts.get(regionName);
+            if (seen != null && seen >= REGION_DUMP_LIMIT) return;
+            sRegionDumpCounts.put(regionName, seen == null ? 1 : seen + 1);
+        }
+        log(module, 4, "REGION_DUMP name=" + regionName + " armed=" + armed
+                + " size=" + regionList.size() + " rects=" + rectListText(regionList));
+    }
+
     /** Debounced re-registration trigger: launcher recomputes + re-registers the region. */
     private static void scheduleRegionRefresh() {
         try {
