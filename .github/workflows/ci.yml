@@ -32,15 +32,22 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # v3 installs `tools platform-tools` by default, but the `tools` package no
+      # longer exists in the SDK repository ("Failed to find package 'tools'").
+      # cmdline-tools is preinstalled on the runner, so only platform-tools is
+      # requested here.
       - name: Set up Android SDK tools
         uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
 
       # gradle/libs.versions.toml pins compileSdk = 37, so the runner needs
       # platforms;android-37. setup-android does not install it for us.
       - name: Install Android SDK platform 37 and build-tools
         run: |
-          set -uo pipefail
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          # -e so a failed package install fails this step instead of being
+          # skipped silently (licenses are accepted by setup-android already).
+          set -euo pipefail
 
           install_pkg() {
             if ! sdkmanager "$1" >/dev/null; then
@@ -55,7 +62,9 @@ jobs:
 
           # Prefer the build-tools line that matches API 37; fall back to the
           # newest published one so a missing 37.x preview does not fail CI.
-          AVAILABLE="$(sdkmanager --list 2>/dev/null || true)"
+          # Both paths hard-fail when nothing is found; a failing listing is a
+          # real error, only an empty grep match is tolerated.
+          AVAILABLE="$(sdkmanager --list 2>/dev/null)"
           BT37="$(printf '%s\n' "$AVAILABLE" | grep -oE 'build-tools;37\.[0-9.]+' | sort -uV | tail -n 1 || true)"
           if [ -n "$BT37" ]; then
             install_pkg "$BT37"
