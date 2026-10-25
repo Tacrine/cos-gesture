@@ -1,5 +1,6 @@
 package com.cos.lspit.gesture;
 
+import com.cos.lspit.gesture.hook.LauncherGestureAdmissionHooker;
 import com.cos.lspit.gesture.hook.LauncherRegionHooker;
 import com.cos.lspit.gesture.hook.NavigationHandleHooks;
 import com.cos.lspit.gesture.hook.SideBackHooker;
@@ -14,6 +15,9 @@ import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam;
  * <p>Scoped to {@code com.android.systemui} (side-back + nav-handle work, see
  * {@link SideBackHooker}) and {@code com.android.launcher} (barOnly bottom
  * region narrow, see {@link LauncherRegionHooker}); see {@code scope.list}.
+ * The launcher branch now registers two hookers: {@link LauncherRegionHooker}
+ * (window-manager registry narrow) and {@link LauncherGestureAdmissionHooker}
+ * (swipe-up admission R-corner veto).
  * The {@code MODULE_READY}/{@code HOST_API}/{@code HOOK_REGISTERED} markers
  * live in the per-package hookers.
  */
@@ -36,6 +40,7 @@ public final class ModuleEntry extends XposedModule {
             NavigationHandleHooks.register(this, param);
         } else if (LAUNCHER.equals(pkg)) {
             LauncherRegionHooker.onPackageLoaded(this, param);
+            LauncherGestureAdmissionHooker.onPackageLoaded(this, param);
         }
     }
 }
