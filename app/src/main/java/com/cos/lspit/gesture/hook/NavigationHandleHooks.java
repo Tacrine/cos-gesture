@@ -36,6 +36,7 @@ import java.util.Set;
 import java.util.WeakHashMap;
 import java.lang.ref.WeakReference;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.cos.lspit.gesture.config.BarBandPolicy;
 import com.cos.lspit.gesture.config.BarPixelPolicy;
@@ -103,6 +104,19 @@ public final class NavigationHandleHooks {
 
     /** C6: cached shade state; the onDraw and setAlpha hot paths only read this. */
     private static volatile boolean sShadeExpandedCache = false;
+
+    // ---------------------------------------------------------------------
+    // Diagnostic probes (log-only). Nothing below is read by any decision:
+    // the budget counters only gate the probe lines, and sLastWindowAlphaArg
+    // only remembers what SystemUI asked for so a later probe can print it.
+    // ---------------------------------------------------------------------
+
+    /** Per-probe line budget; onDraw is a hot path, so the cap is small on purpose. */
+    private static final int PROBE_LOG_LIMIT = 200;
+    /** Probe key -> lines already written; keyed per probe so budgets never interact. */
+    private static final Map<String, AtomicInteger> sProbeCounts = new ConcurrentHashMap<>();
+    /** Last argument SystemUI passed to updateWindowAlpha(int); diagnostic only. */
+    private static volatile int sLastWindowAlphaArg = Integer.MIN_VALUE;
 
     private NavigationHandleHooks() {}
 
@@ -792,7 +806,14 @@ public final class NavigationHandleHooks {
                 View view = sShadeRecheckView;
                 if (view == null) return;
                 refreshShadeCache(view);
-                if (suppressionGate()) scheduleShadeRecheck(view);
+                if (suppressionGate()) {
+                    scheduleShadeRecheck(view);
+                } else {
+                    // Probe-only: the 5s self-heal chain dies here; that used to be silent.
+                    logThrottled(4, "SHADE_RECHECK_STOP", "SHADE_RECHECK_STOP gate=false"
+                            + " shade=" + sShadeExpandedCache
+                            + " records=" + probeRecordCount() + " site=runnable");
+                }
             }
         };
 
@@ -809,6 +830,17 @@ public final class NavigationHandleHooks {
                                 // read, so the hot path never reflects (C6).
                                 boolean moduleHide = GestureConfigClient.isBarHiddenEnabled();
                                 boolean sysConverted = SystemHide.sConvertedHideActive;
+                                // P2: probe-only. The budget is taken BEFORE the message is
+                                // built so a frame past the cap costs one map lookup and no
+                                // string work. Nothing here is read by the gate below.
+                                if (takeProbeSlot("ondraw-gate")) {
+                                    log(module, 4, "ONDRAW_GATE module=" + moduleHide
+                                            + " sys=" + sysConverted
+                                            + " shade=" + sShadeExpandedCache
+                                            + " gate=" + suppressionGate()
+                                            + " alpha=" + probeAlpha(chain)
+                                            + " vis=" + probeVisibility(chain));
+                                }
                                 if (moduleHide || sysConverted) {
                                     Object thiz = chain.getThisObject();
                                     if (thiz instanceof View) {
@@ -830,11 +862,22 @@ public final class NavigationHandleHooks {
                                             }
                                             // momus obs5: the single alpha writer, even here.
                                             zeroTarget(view);
+                                            if (takeProbeSlot("ondraw-skip")) {
+                                                log(module, 4, "ONDRAW_SKIP reason=gate target="
+                                                        + System.identityHashCode(view));
+                                            }
                                             return null; // skip drawing the hint bar
                                         }
                                     }
                                 }
                             } catch (Throwable ignored) {
+                            }
+                            // Probe-only: reached whenever the interceptor did not return null,
+                            // i.e. the bar IS drawn. The reason is re-derived from the same
+                            // volatile reads (no state is written). Budget taken first so a
+                            // frame past the cap does no string work.
+                            if (takeProbeSlot("ondraw-draw")) {
+                                log(module, 4, "ONDRAW_DRAW reason=" + probeDrawReason());
                             }
                             return chain.proceed();
                         });
@@ -912,6 +955,70 @@ public final class NavigationHandleHooks {
         }
 
         /**
+         * Probe-only: why the onDraw interceptor let the frame through. Re-derived from the
+         * same volatile reads the gate uses; never writes state, never influences drawing.
+         */
+        private static String probeDrawReason() {
+            boolean moduleHide = GestureConfigClient.isBarHiddenEnabled();
+            boolean sysConverted = SystemHide.sConvertedHideActive;
+            if (!(moduleHide || sysConverted)) return "gate-false";
+            if (sShadeExpandedCache) return "shade";
+            return "other";
+        }
+
+        /** Probe-only: the handle's alpha without letting a probe failure disturb drawing. */
+        private static String probeAlpha(XposedInterface.Chain chain) {
+            try {
+                Object thiz = chain.getThisObject();
+                return thiz instanceof View ? String.valueOf(((View) thiz).getAlpha()) : "n/a";
+            } catch (Throwable ignored) {
+                return "n/a";
+            }
+        }
+
+        /** Probe-only: the handle's visibility without letting a probe failure disturb drawing. */
+        private static String probeVisibility(XposedInterface.Chain chain) {
+            try {
+                Object thiz = chain.getThisObject();
+                return thiz instanceof View ? String.valueOf(((View) thiz).getVisibility()) : "n/a";
+            } catch (Throwable ignored) {
+                return "n/a";
+            }
+        }
+
+        /** Probe-only: short class name for log lines (never used by a decision). */
+        private static String probeName(Object view) {
+            try {
+                String name = view.getClass().getName();
+                int dot = name.lastIndexOf('.');
+                return dot < 0 ? name : name.substring(dot + 1);
+            } catch (Throwable ignored) {
+                return "?";
+            }
+        }
+
+        /** Probe-only: the alpha SystemUI passed to setAlpha(float), or "n/a". */
+        private static String probeArgAlpha(XposedInterface.Chain chain) {
+            try {
+                Object arg = chain.getArg(0);
+                return arg instanceof Float ? String.valueOf((Float) arg) : "n/a";
+            } catch (Throwable ignored) {
+                return "n/a";
+            }
+        }
+
+        /** Probe-only: how many alpha records exist right now (main thread, best effort). */
+        private static int probeRecordCount() {
+            try {
+                synchronized (sRecordedAlpha) {
+                    return sRecordedAlpha.size();
+                }
+            } catch (Throwable ignored) {
+                return -1;
+            }
+        }
+
+        /**
          * C3.4: the single writer that turns a target transparent. Order is fixed
          * (idempotent guard -> read alpha -> record -> write 0) and the write runs
          * inside our own window so the interceptor lets it through.
@@ -921,6 +1028,11 @@ public final class NavigationHandleHooks {
             if (sRecordedAlpha.containsKey(target)) return;
             float prev = target.getAlpha();
             sRecordedAlpha.put(target, prev);
+            // Probe-only: the non-drawing alpha writer used to be completely silent.
+            // `src` would require a signature change (a real behaviour edit), so it is
+            // deliberately omitted rather than faked.
+            logThrottled(4, "ZERO_TARGET", "ZERO_TARGET view=" + probeName(target)
+                    + " prev=" + prev);
             try {
                 sAlphaWriteTarget = target;
                 sModuleAlphaWrite = true;
@@ -989,6 +1101,9 @@ public final class NavigationHandleHooks {
                 if (rec == null) continue;
                 float out = BarPixelPolicy.alphaTarget(false, true, rec);
                 if (out < 0) continue;
+                // Probe-only: restoreTargets used to be visible only via RESTORE_SHADE.
+                logThrottled(4, "RESTORE_TARGET", "RESTORE_TARGET view=" + probeName(v)
+                        + " out=" + out);
                 try {
                     sAlphaWriteTarget = v;
                     sModuleAlphaWrite = true;
@@ -1072,7 +1187,13 @@ public final class NavigationHandleHooks {
         /** C7: re-resolve after a layout pass (sibling views may have been rebuilt). */
         static void onHandleLaidOut(View view) {
             if (view == null) return;
-            if (!suppressionGate()) return;
+            if (!suppressionGate()) {
+                // Probe-only: the most common refresh path gives up here while gate is false.
+                logThrottled(4, "SHADE_RECHECK_STOP", "SHADE_RECHECK_STOP gate=false"
+                        + " shade=" + sShadeExpandedCache
+                        + " records=" + probeRecordCount() + " site=laid-out");
+                return;
+            }
             sTargetsResolved = false;
             resolveSuppressTargets(navBarAncestor(view));
         }
@@ -1107,6 +1228,14 @@ public final class NavigationHandleHooks {
                             // argument, so this interceptor never reads the cache.
                             boolean bar = handle.isInstance(thiz);
                             if ((bar || sSuppressTargets.contains(thiz)) && suppressionGate()) {
+                                // Probe-only: SystemUI asked for a visible alpha and we forced
+                                // 0f. Reading the incoming value changes nothing (the write
+                                // below still replaces it with 0f, exactly as before).
+                                if (takeProbeSlot("setalpha")) {
+                                    log(module, 4, "SETALPHA_FORCED prev=" + probeArgAlpha(chain)
+                                            + " view=" + probeName(thiz)
+                                            + " sys=" + SystemHide.sConvertedHideActive);
+                                }
                                 return chain.proceed(new Object[] { 0f });
                             }
                             return chain.proceed();
@@ -1234,6 +1363,10 @@ public final class NavigationHandleHooks {
                             }
                             if (!(arg instanceof Integer)) return chain.proceed();
                             int requested = (Integer) arg;
+                            // Probe-only record of the last funnel argument, so GETSHOWGUIDEBAR
+                            // can show which alpha the visibility funnel asked for. No decision
+                            // in this class ever reads this field.
+                            sLastWindowAlphaArg = requested;
                             Object alphaView = chain.getThisObject();
                             if (alphaView != null) {
                                 sNavbarViewRef = new WeakReference<>(alphaView);
@@ -1241,6 +1374,15 @@ public final class NavigationHandleHooks {
                             boolean mback = GestureConfigClient.isMbackEnabled();
                             boolean barOnly = GestureConfigClient.isBarOnlyEnabled();
                             if (!shouldConvert(requested, mback, barOnly)) {
+                                // Probe-only (P1): the "do not convert" branch was silent, so the
+                                // silent clearing of sConvertedHideActive below could never be
+                                // attributed. Logged before the write so the value shown is the
+                                // real "before"; the write itself is unchanged.
+                                logThrottled(module, 4, "SYSHIDE_PASS",
+                                        "SYSHIDE_PASS updateWindowAlpha arg=" + requested
+                                                + " mback=" + mback + " barOnly=" + barOnly
+                                                + " sysConverted=" + sConvertedHideActive
+                                                + "->false");
                                 sConvertedHideActive = false;
                                 return chain.proceed();
                             }
@@ -1276,6 +1418,10 @@ public final class NavigationHandleHooks {
             // path take the "shown" branch (inflater VISIBLE, guide bar GONE,
             // alpha 1.0) regardless of toggle order.
             hookUtilsHideMode(module, loader);
+            // Probe-only (P7): getShowGuideBar() is the single boolean updateViewVisible$1
+            // branches on to re-show the guide bar, and it was completely unobservable.
+            // The hook forwards the original result untouched; only the log line is new.
+            hookShowGuideBar(module, loader);
             // Hook 5 (config-driven reapply): the boot-time hide decision may
             // have executed while the config provider was still unreachable
             // (fail-closed defaults), leaving the inflater GONE even though
@@ -1452,6 +1598,63 @@ public final class NavigationHandleHooks {
                 log(module, 5, "SYSHIDE_NO_MATCH getSwipeSideGestureBarType "
                         + className + " " + failure);
             }
+        }
+
+        /**
+         * Probe-only (P7): logs the value {@code updateViewVisible$1} branches on when it
+         * decides whether to re-show the guide bar. The interceptor runs the original and
+         * forwards its result unchanged -- only the log line is added, so the visibility
+         * pipeline keeps exactly the semantics it had before this probe existed.
+         *
+         * <p>{@code upType} / {@code sideType} are the two OEM setting caches
+         * ({@code hide_gesture_bar_enable} / {@code gesture_side_hide_bar_prevention_enable});
+         * {@code alphaArg} is the last argument SystemUI passed to updateWindowAlpha(int).
+         */
+        private static void hookShowGuideBar(XposedModule module, ClassLoader loader) {
+            try {
+                Class<?> up = Class.forName(
+                        "com.oplus.systemui.navigationbar.eximpl.NavigationBarGestureUpExlmpl",
+                        false, loader);
+                Method method = up.getDeclaredMethod("getShowGuideBar");
+                module.hook(method)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .intercept(chain -> {
+                            Object result = chain.proceed();
+                            logThrottled(module, 4, "GETSHOWGUIDEBAR",
+                                    "CORNER-NAVBAR GETSHOWGUIDEBAR value=" + result
+                                            + " upType=" + probeObserverType(loader,
+                                                    "com.oplus.systemui.navigationbar.observer"
+                                                            + ".SwipeUpGestureBarTypeObserver",
+                                                    "mSwipeUpGestureBarType")
+                                            + " sideType=" + probeObserverType(loader,
+                                                    "com.oplus.systemui.navigationbar.observer"
+                                                            + ".SwipeSideGestureBarTypeObserver",
+                                                    "mSwipeSideGestureBarType")
+                                            + " alphaArg=" + probeLastWindowAlphaArg());
+                            return result;
+                        });
+                log(module, 4, "CORNER-NAVBAR_HOOK_OK getShowGuideBar");
+            } catch (Throwable failure) {
+                log(module, 5, "CORNER-NAVBAR_NO_MATCH getShowGuideBar " + failure);
+            }
+        }
+
+        /** Probe-only: reads a static int setting cache; -1 when unavailable. */
+        private static int probeObserverType(ClassLoader loader, String className, String field) {
+            try {
+                Class<?> clazz = Class.forName(className, false, loader);
+                Field f = clazz.getDeclaredField(field);
+                f.setAccessible(true);
+                return f.getInt(null);
+            } catch (Throwable ignored) {
+                return -1;
+            }
+        }
+
+        /** Probe-only: the last updateWindowAlpha(int) argument, or -1 when never seen. */
+        private static String probeLastWindowAlphaArg() {
+            int arg = sLastWindowAlphaArg;
+            return arg == Integer.MIN_VALUE ? "none" : String.valueOf(arg);
         }
     }
 
@@ -2070,6 +2273,33 @@ public final class NavigationHandleHooks {
         } catch (Throwable ignored) {
             // Logging is best effort.
         }
+    }
+
+    /**
+     * Probe-only: writes {@code message} at most {@link #PROBE_LOG_LIMIT} times per
+     * probe key per process. Purely diagnostic -- a dropped line changes nothing,
+     * because no decision in this class ever reads a probe counter.
+     */
+    private static void logThrottled(XposedModule module, int priority, String probeKey,
+            String message) {
+        if (!takeProbeSlot(probeKey)) return;
+        log(module, priority, message);
+    }
+
+    /** Same as {@link #logThrottled} but for call sites that only have the module singleton. */
+    private static void logThrottled(int priority, String probeKey, String message) {
+        if (!takeProbeSlot(probeKey)) return;
+        log(priority, message);
+    }
+
+    private static boolean takeProbeSlot(String probeKey) {
+        AtomicInteger counter = sProbeCounts.get(probeKey);
+        if (counter == null) {
+            counter = new AtomicInteger();
+            AtomicInteger raced = sProbeCounts.putIfAbsent(probeKey, counter);
+            if (raced != null) counter = raced;
+        }
+        return counter.incrementAndGet() <= PROBE_LOG_LIMIT;
     }
 
     private static void log(int priority, String message) {
