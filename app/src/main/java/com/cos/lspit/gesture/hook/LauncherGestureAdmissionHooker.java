@@ -24,11 +24,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  * when it answers {@code false} the caller installs {@code InputConsumer.NO_OP}
  * instead of building an activity consumer, so no swipe-up handler is ever created.
  *
- * <p><strong>Only</strong> touches inside the bottom-right corner band
- * ({@link CornerRBandPolicy}) are vetoed; every other action, coordinate and
- * geometry — including anything unreadable — passes through untouched
- * (<em>fail-open</em>). While {@code barOnly} is off nothing is vetoed at all, so
- * the launcher behaves exactly as if the module were not installed.
+ * <p><strong>Only</strong> touches inside the bottom-left <strong>or</strong>
+ * bottom-right corner band ({@link CornerRBandPolicy}) are vetoed; every other
+ * action, coordinate and geometry — including anything unreadable — passes through
+ * untouched (<em>fail-open</em>). While {@code barOnly} is off nothing is vetoed at
+ * all, so the launcher behaves exactly as if the module were not installed.
  *
  * <p>{@code canRespondGesture} is a pure predicate (it never writes
  * {@code mConsumer}) but its body still resets two state flags before returning,
@@ -140,12 +140,19 @@ public final class LauncherGestureAdmissionHooker {
             height = metrics.heightPixels;
             bandPx = CornerRBandPolicy.cornerBandPx(CornerRBandPolicy.CORNER_BAND_DP, metrics.density);
             stage = "policy";
-            boolean veto = CornerRBandPolicy.inRCornerBand(
+            // Both bands share the same geometry read above; neither call re-reads metrics.
+            final boolean inRight = CornerRBandPolicy.inRCornerBand(
                     x, y, width, height, SideGesturePolicy.BOTTOM_STRIP_H, bandPx);
+            final boolean inLeft = CornerRBandPolicy.inLCornerBand(
+                    x, y, width, height, SideGesturePolicy.BOTTOM_STRIP_H, bandPx);
+            final boolean veto = inRight || inLeft;
+            // The two bands never overlap on this geometry (300 < 780), so the side is
+            // unambiguous; if a tiny display ever made them overlap, "L first" is fixed.
+            final String side = inLeft ? "L" : (inRight ? "R" : "-");
             // The veto decision and its log happen before proceed() so that a veto
             // line always means "the predicate said yes", never "the override ran".
             if (veto) {
-                log(module, 4, "CORNER-NO-RESPOND veto x=" + x + " y=" + y
+                log(module, 4, "CORNER-NO-RESPOND veto side=" + side + " x=" + x + " y=" + y
                         + " w=" + width + " h=" + height + " band=" + bandPx);
             } else {
                 logPass(module, "CORNER-NO-RESPOND pass x=" + x + " y=" + y
