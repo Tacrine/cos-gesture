@@ -985,6 +985,35 @@ public final class NavigationHandleHooks {
             // S0-END
         }
 
+        /**
+         * B: re-resolve + re-zero after an OEM visibility funnel ran (never on the hot
+         * path). The first line is the named gate on purpose: while the shade is
+         * expanded the gate is false and this method does nothing at all, so the
+         * "shade must stay visible" design allowance cannot be broken from here.
+         *
+         * <p>Same thread contract as {@link #restoreTargets()}: the body only touches
+         * views on the main thread, and a caller elsewhere is posted over instead of
+         * writing straight from the interceptor thread.
+         *
+         * <p>Idempotent: it re-enters {@link #resolveSuppressTargets}, whose zeroing
+         * goes through {@link #zeroTarget}, which returns early for any view already
+         * in the record table -- so a repeat call cannot add a second alpha write.
+         */
+        static void recorrectIfSuppressed() {
+            if (!suppressionGate()) return;              // shade expanded / no hide source -> do nothing
+            if (Looper.myLooper() != Looper.getMainLooper()) {
+                new Handler(Looper.getMainLooper()).post(HiddenBar::recorrectIfSuppressed);
+                return;                                   // same thread contract as restoreTargets
+            }
+            sTargetsResolved = false;
+            View[] snapshot;
+            synchronized (sHandles) { snapshot = sHandles.toArray(new View[0]); }
+            for (View v : snapshot) {
+                if (v == null) continue;
+                try { resolveSuppressTargets(navBarAncestor(v)); } catch (Throwable ignored) {}
+            }
+        }
+
         /** C3.2: admit siblings that pass the pure policy; containers never qualify. */
         private static void collectCandidates(View root, Set<View> out) {
             if (!(root instanceof ViewGroup)) return;
@@ -1393,8 +1422,10 @@ public final class NavigationHandleHooks {
                             // S0-BEGIN
                             Object funnelResult = chain.proceed(new Object[] { 0 });
                             logNavState(module, loader);
-                            return funnelResult;
                             // S0-END
+                            // S4: the OEM funnel just ran; re-assert suppression after it.
+                            HiddenBar.recorrectIfSuppressed();
+                            return funnelResult;
                         });
                 log(module, 4, "SYSHIDE_HOOK_OK updateSideGestureBarVisible");
             } catch (Throwable failure) {
@@ -1441,8 +1472,10 @@ public final class NavigationHandleHooks {
                             // S0-BEGIN
                             Object alphaResult = chain.proceed(new Object[] { 0 });
                             logNavState(module, loader);
-                            return alphaResult;
                             // S0-END
+                            // S4: the OEM funnel just ran; re-assert suppression after it.
+                            HiddenBar.recorrectIfSuppressed();
+                            return alphaResult;
                         });
                 log(module, 4, "SYSHIDE_HOOK_OK updateWindowAlpha");
             } catch (Throwable failure) {
