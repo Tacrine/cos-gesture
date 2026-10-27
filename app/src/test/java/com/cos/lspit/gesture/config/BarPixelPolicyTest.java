@@ -15,6 +15,10 @@ import org.junit.Test;
  * branch check: no test asserts a constant against itself.
  */
 public class BarPixelPolicyTest {
+    /** S0 真机实测在 VISIBLE 的那个容器（支 1）：白名单唯一一项对应的真实类。 */
+    private static final String GUIDE =
+            "com.oplusos.systemui.navigationbar.OplusNavigationBarInflaterView";
+
     @Test
     public void suppressTruthTable() {
         // 2 x 2 x 2 table; only "a hide source is active AND the shade is closed"
@@ -123,5 +127,52 @@ public class BarPixelPolicyTest {
         assertTrue(existingNumbers.contains(1));
         assertTrue(existingNumbers.contains(2));
         assertTrue(existingNumbers.contains(3));
+    }
+
+    @Test
+    public void admitsContainerPainterAcceptsGuideBarContainer() {
+        // N1: the one container S0 saw in VISIBLE (支 1) must pass every gate.
+        assertTrue(BarPixelPolicy.admitsContainerPainter(GUIDE, true, 1f, 300, 66));
+    }
+
+    @Test
+    public void admitsContainerPainterRejectsUnknownContainer() {
+        // N2: the container channel does not reuse the sibling name fragments.
+        assertFalse(BarPixelPolicy.admitsContainerPainter(
+                "com.x.SomeLinearLayout", true, 1f, 300, 66));
+        assertFalse(BarPixelPolicy.admitsContainerPainter(
+                "com.x.GestureBarView", true, 1f, 300, 66));
+    }
+
+    @Test
+    public void admitsContainerPainterRejectsInvisibleOrTransparent() {
+        // N3: the visibility and alpha gates, in that order.
+        assertFalse(BarPixelPolicy.admitsContainerPainter(GUIDE, false, 1f, 300, 66));
+        assertFalse(BarPixelPolicy.admitsContainerPainter(GUIDE, true, 0f, 300, 66));
+        assertFalse(BarPixelPolicy.admitsContainerPainter(GUIDE, true, -1f, 300, 66));
+    }
+
+    @Test
+    public void admitsContainerPainterRejectsZeroArea() {
+        // N4: the area gate is "both dimensions must be positive".
+        assertFalse(BarPixelPolicy.admitsContainerPainter(GUIDE, true, 1f, 0, 66));
+        assertFalse(BarPixelPolicy.admitsContainerPainter(GUIDE, true, 1f, 300, 0));
+        assertFalse(BarPixelPolicy.admitsContainerPainter(GUIDE, true, 1f, -1, 66));
+    }
+
+    @Test
+    public void admitsContainerPainterRejectsNull() {
+        // N5: null name never matches (stateOk deliberately keeps cls non-null).
+        assertFalse(BarPixelPolicy.admitsContainerPainter(null, true, 1f, 300, 66));
+    }
+
+    @Test
+    public void admitsSiblingStillRejectsThatSameContainer() {
+        // N6: regression gate -- admitting the container must not loosen the
+        // sibling channel. The second half uses a fixed literal on purpose:
+        // GUIDE does not hit any BAR_NAME_FRAGMENTS, so using it there would
+        // make admitsSibling(..., false) false and this test could never pass.
+        assertFalse(BarPixelPolicy.admitsSibling(GUIDE, true, 1f, 300, 66, true));
+        assertTrue(BarPixelPolicy.admitsSibling("com.x.GestureBarView", true, 1f, 300, 66, false));
     }
 }

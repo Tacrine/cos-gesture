@@ -18,6 +18,9 @@ public final class BarPixelPolicy {
     private static final String[] BAR_NAME_FRAGMENTS = {
             "gesturebar", "guidebar", "hintbar", "sidegesturebar"};
 
+    /** Container painters that may be suppressed despite being a ViewGroup (A'). */
+    private static final String[] CONTAINER_NAME_FRAGMENTS = {"oplusnavigationbarinflaterview"};
+
     private BarPixelPolicy() {}
 
     /**
@@ -51,6 +54,25 @@ public final class BarPixelPolicy {
             if (lower.contains(fragment)) return true;
         }
         return false;
+    }
+
+    /** 名字门：整个工程里**唯一**一份白名单比对（v12；S1 新增，S3 的探针直接调它）。 */
+    public static boolean nameMatches(String className) {
+        if (className == null) return false;
+        String lower = className.toLowerCase(java.util.Locale.ROOT);
+        for (String fragment : CONTAINER_NAME_FRAGMENTS) {
+            if (lower.contains(fragment)) return true;
+        }
+        return false;
+    }
+
+    public static boolean admitsContainerPainter(String className, boolean visible,
+            float alpha, int w, int h) {
+        if (className == null) return false;
+        if (!visible) return false;
+        if (!(alpha > 0f)) return false;
+        if (w <= 0 || h <= 0) return false;
+        return nameMatches(className);   // ← 名字门只走这一处，不再自带 contains 循环
     }
 
     /**
