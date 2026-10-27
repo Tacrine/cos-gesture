@@ -36,6 +36,9 @@ import java.util.Set;
 import java.util.WeakHashMap;
 import java.lang.ref.WeakReference;
 import java.util.concurrent.ConcurrentHashMap;
+// S0-BEGIN
+import java.util.concurrent.atomic.AtomicInteger;
+// S0-END
 
 import com.cos.lspit.gesture.config.BarBandPolicy;
 import com.cos.lspit.gesture.config.BarPixelPolicy;
@@ -103,6 +106,30 @@ public final class NavigationHandleHooks {
 
     /** C6: cached shade state; the onDraw and setAlpha hot paths only read this. */
     private static volatile boolean sShadeExpandedCache = false;
+
+    // S0-BEGIN
+    // S0 probe budgets (plan §3.1). Log-only: every counter below is read solely to
+    // decide whether another log line is emitted. None of them is consulted by any
+    // gate, write or return value.
+    /** P-G budget: max 16 GUIDEBAR_VIS lines per process. */
+    private static final AtomicInteger S0_GUIDEBAR_VIS = new AtomicInteger();
+    /** P-G-down budget: max 1 GUIDEBAR_NO_MATCH line per process. */
+    private static final AtomicInteger S0_GUIDEBAR_NO_MATCH = new AtomicInteger();
+    /** P-N budget: max 16 NAVSTATE lines per process. */
+    private static final AtomicInteger S0_NAVSTATE = new AtomicInteger();
+    /** P-C budget: max 16 CONTAINER_SCAN lines per process. */
+    private static final AtomicInteger S0_CONTAINER_SCAN = new AtomicInteger();
+    /** P-C budget: max 48 CONTAINER_CHILD lines per process. */
+    private static final AtomicInteger S0_CONTAINER_CHILD = new AtomicInteger();
+    /** P-A budget: max 6 NAVBAR_DUMP passes per process. */
+    private static final AtomicInteger S0_NAVBAR_DUMP = new AtomicInteger();
+    /** P-A cap: max 48 lines per NAVBAR_DUMP pass. */
+    private static final int S0_DUMP_LINES = 48;
+    /** P-A dedupe: visibility tuples already dumped (bounded, cleared with the budget). */
+    private static final Set<String> S0_DUMP_SEEN = new HashSet<>();
+    /** P-C root flag: true only for the collectCandidates call made by resolve. */
+    private static volatile boolean s0ScanRoot = false;
+    // S0-END
 
     private NavigationHandleHooks() {}
 
@@ -939,7 +966,13 @@ public final class NavigationHandleHooks {
         private static void resolveSuppressTargets(View navBar) {
             if (navBar == null) return;
             Set<View> candidates = new HashSet<>();
+            // S0-BEGIN
+            s0ScanRoot = true;
+            // S0-END
             collectCandidates(navBar, candidates);
+            // S0-BEGIN
+            s0ScanRoot = false;
+            // S0-END
             Set<View> newOnes = new HashSet<>(candidates);
             newOnes.removeAll(sSuppressTargets);
             BarPixelPolicy.mergeInto(sSuppressTargets, candidates);
@@ -947,12 +980,23 @@ public final class NavigationHandleHooks {
                 zeroTarget(target);
             }
             sTargetsResolved = true;
+            // S0-BEGIN
+            navBarDump(navBar);
+            // S0-END
         }
 
         /** C3.2: admit siblings that pass the pure policy; containers never qualify. */
         private static void collectCandidates(View root, Set<View> out) {
             if (!(root instanceof ViewGroup)) return;
             ViewGroup group = (ViewGroup) root;
+            // S0-BEGIN
+            // Root-only: the flag is set by resolveSuppressTargets and consumed here,
+            // so recursive levels never emit a second CONTAINER_SCAN.
+            if (s0ScanRoot) {
+                s0ScanRoot = false;
+                containerScan(group);
+            }
+            // S0-END
             for (int i = 0; i < group.getChildCount(); i++) {
                 View child = group.getChildAt(i);
                 if (child == null) continue;
@@ -965,6 +1009,118 @@ public final class NavigationHandleHooks {
                 collectCandidates(child, out);
             }
         }
+
+        // S0-BEGIN
+        /**
+         * S0 P-C: one CONTAINER_SCAN for the root call plus one CONTAINER_CHILD for
+         * every direct {@code ViewGroup} child. Pure observation -- it re-reads the
+         * same children {@link #collectCandidates} is about to visit and never
+         * touches the candidate set.
+         */
+        private static void containerScan(ViewGroup group) {
+            try {
+                if (S0_CONTAINER_SCAN.incrementAndGet() <= 16) {
+                    int entered = 0;
+                    int vgChildren = 0;
+                    for (int i = 0; i < group.getChildCount(); i++) {
+                        View child = group.getChildAt(i);
+                        if (child == null) continue;
+                        entered++;
+                        if (child instanceof ViewGroup) vgChildren++;
+                    }
+                    log(4, "CONTAINER_SCAN entered=" + entered + " vgChildren=" + vgChildren);
+                }
+                for (int i = 0; i < group.getChildCount(); i++) {
+                    View child = group.getChildAt(i);
+                    if (child == null || !(child instanceof ViewGroup)) continue;
+                    int n = S0_CONTAINER_CHILD.incrementAndGet();
+                    if (n > 48) return;
+                    int vis = child.getVisibility();
+                    float alpha = child.getAlpha();
+                    int w = child.getWidth();
+                    int h = child.getHeight();
+                    boolean stateOk = (vis == 0) && (alpha > 0f) && (w > 0) && (h > 0);
+                    log(4, "CONTAINER_CHILD n=" + n
+                            + " stateOk=" + (stateOk ? 1 : 0)
+                            + " cls=" + child.getClass().getName()
+                            + " vis=" + vis + " alpha=" + alpha
+                            + " w=" + w + " h=" + h);
+                }
+            } catch (Throwable ignored) {
+                // Probe logging must never disturb the suppression path.
+            }
+        }
+
+        /**
+         * S0 P-A: full-descendant visibility snapshot of the navigation bar subtree,
+         * {@code ViewGroup} restriction deliberately lifted so non-container painters
+         * become observable. VISIBLE entries are emitted first; passes are deduped by
+         * the visibility tuple and capped at 6 per process, 48 lines per pass.
+         */
+        private static void navBarDump(View navBar) {
+            try {
+                if (navBar == null) return;
+                List<View> all = new ArrayList<>();
+                dumpCollect(navBar, all);
+                StringBuilder tuple = new StringBuilder();
+                for (View v : all) {
+                    tuple.append(v.getVisibility()).append(',');
+                }
+                String key = tuple.toString();
+                synchronized (S0_DUMP_SEEN) {
+                    if (S0_DUMP_SEEN.contains(key)) return;
+                }
+                if (S0_NAVBAR_DUMP.incrementAndGet() > 6) return;
+                synchronized (S0_DUMP_SEEN) {
+                    S0_DUMP_SEEN.add(key);
+                }
+                List<View> ordered = new ArrayList<>(all.size());
+                for (View v : all) {
+                    if (v.getVisibility() == View.VISIBLE) ordered.add(v);
+                }
+                for (View v : all) {
+                    if (v.getVisibility() != View.VISIBLE) ordered.add(v);
+                }
+                int emitted = 0;
+                for (View v : ordered) {
+                    if (emitted >= S0_DUMP_LINES) break;
+                    emitted++;
+                    log(4, "NAVBAR_DUMP cls=" + v.getClass().getName()
+                            + " vis=" + v.getVisibility()
+                            + " alpha=" + v.getAlpha()
+                            + " w=" + v.getWidth() + " h=" + v.getHeight()
+                            + " parent=" + dumpParentName(v));
+                }
+                if (ordered.size() > emitted) {
+                    log(4, "NAVBAR_DUMP_TRUNCATED scanned=" + all.size()
+                            + " emitted=" + emitted);
+                }
+            } catch (Throwable ignored) {
+                // Probe logging must never disturb the suppression path.
+            }
+        }
+
+        /** S0 P-A helper: every descendant, containers and non-containers alike. */
+        private static void dumpCollect(View root, List<View> out) {
+            out.add(root);
+            if (!(root instanceof ViewGroup)) return;
+            ViewGroup group = (ViewGroup) root;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View child = group.getChildAt(i);
+                if (child != null) dumpCollect(child, out);
+            }
+        }
+
+        /** S0 P-A helper: simplified parent class name, "none" for the subtree root. */
+        private static String dumpParentName(View v) {
+            try {
+                ViewParent parent = v.getParent();
+                return parent == null ? "none" : parent.getClass().getSimpleName();
+            } catch (Throwable ignored) {
+                return "unknown";
+            }
+        }
+        // S0-END
 
         /**
          * C3.5 / Z2: the ONLY restore entry point. Traversal, write-back and removal all
@@ -1204,7 +1360,11 @@ public final class NavigationHandleHooks {
                                     + requested + "->0 mback=" + mback
                                     + " barOnly=" + barOnly);
                             sConvertedHideActive = true;
-                            return chain.proceed(new Object[] { 0 });
+                            // S0-BEGIN
+                            Object funnelResult = chain.proceed(new Object[] { 0 });
+                            logNavState(module, loader);
+                            return funnelResult;
+                            // S0-END
                         });
                 log(module, 4, "SYSHIDE_HOOK_OK updateSideGestureBarVisible");
             } catch (Throwable failure) {
@@ -1248,7 +1408,11 @@ public final class NavigationHandleHooks {
                                     + requested + "->0 mback=" + mback
                                     + " barOnly=" + barOnly);
                             sConvertedHideActive = true;
-                            return chain.proceed(new Object[] { 0 });
+                            // S0-BEGIN
+                            Object alphaResult = chain.proceed(new Object[] { 0 });
+                            logNavState(module, loader);
+                            return alphaResult;
+                            // S0-END
                         });
                 log(module, 4, "SYSHIDE_HOOK_OK updateWindowAlpha");
             } catch (Throwable failure) {
@@ -1283,6 +1447,10 @@ public final class NavigationHandleHooks {
             // loads and a feature needs the bar, re-run the exact same entry
             // point the settings observer uses, with 0 ("shown").
             GestureConfigClient.addConfigListener(() -> reapplyShown(module));
+            // S0-BEGIN
+            // Hook 6 (S0 probe only): observe the guide bar's own visibility writes.
+            hookGuideBarVisibility(module, loader);
+            // S0-END
         }
 
         private static void reapplyShown(XposedModule module) {
@@ -1422,6 +1590,98 @@ public final class NavigationHandleHooks {
                         + "UtilsStaticToolsExImpl " + failure);
             }
         }
+
+        // S0-BEGIN
+        /**
+         * S0 P-G: report every write to the guide bar's own visibility together with
+         * the runtime class of the view that actually receives it. The argument is
+         * always passed through untouched -- this hook has no opinion on the value.
+         */
+        private static void hookGuideBarVisibility(XposedModule module, ClassLoader loader) {
+            try {
+                Class<?> impl = Class.forName(
+                        "com.oplus.systemui.navigationbar.eximpl.NavigationBarGestureUpExlmpl",
+                        false, loader);
+                Method method = impl.getDeclaredMethod("setVisibility", int.class);
+                Field field = null;
+                try {
+                    field = impl.getDeclaredField("mGestureUpGuideBarView");
+                    field.setAccessible(true);
+                } catch (Throwable ignored) {
+                    // The FQCN stays available through NAVBAR_DUMP even without this.
+                    field = null;
+                }
+                final Field guideField = field;
+                module.hook(method)
+                        .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                        .intercept(chain -> {
+                            Object arg = null;
+                            try {
+                                arg = chain.getArg(0);
+                            } catch (Throwable ignored) {
+                                // Leave arg null: still pass through below.
+                            }
+                            View guide = null;
+                            String cls = "none";
+                            int pre = -1;
+                            if (arg instanceof Integer && guideField != null) {
+                                try {
+                                    Object thisObj = chain.getThisObject();
+                                    Object v = thisObj == null ? null : guideField.get(thisObj);
+                                    if (v instanceof View) {
+                                        guide = (View) v;
+                                        cls = guide.getClass().getName();
+                                        pre = guide.getVisibility();
+                                    }
+                                } catch (Throwable ignored) {
+                                    // Keep the unknown markers.
+                                }
+                            }
+                            Object result = chain.proceed();
+                            int post = -1;
+                            try {
+                                if (guide != null) post = guide.getVisibility();
+                            } catch (Throwable ignored) {
+                                // Keep -1.
+                            }
+                            if (arg instanceof Integer
+                                    && S0_GUIDEBAR_VIS.incrementAndGet() <= 16) {
+                                log(module, 4, "GUIDEBAR_VIS arg=" + arg
+                                        + " pre=" + pre + " post=" + post + " cls=" + cls);
+                            }
+                            return result;
+                        });
+            } catch (Throwable failure) {
+                if (S0_GUIDEBAR_NO_MATCH.incrementAndGet() <= 1) {
+                    log(module, 5, "GUIDEBAR_NO_MATCH " + failure);
+                }
+            }
+        }
+
+        /**
+         * S0 P-N: sample the three OEM predicates the suppressed branch is built from.
+         * Called after the funnel's own rewrite so it reports the live values, never
+         * feeds one back.
+         */
+        private static void logNavState(XposedModule module, ClassLoader loader) {
+            try {
+                if (S0_NAVSTATE.incrementAndGet() > 16) return;
+                Class<?> navUtils = Class.forName(
+                        "com.oplus.systemui.navigationbar.utils.NavBarUtils", false, loader);
+                boolean up = Boolean.TRUE.equals(
+                        navUtils.getDeclaredMethod("isGestureUpMode").invoke(null));
+                boolean side = Boolean.TRUE.equals(
+                        navUtils.getDeclaredMethod("isGestureSideMode").invoke(null));
+                boolean sideHide = Boolean.TRUE.equals(
+                        navUtils.getDeclaredMethod("isSideGestureBarHide").invoke(null));
+                Object navState = navUtils.getDeclaredMethod("getNavState").invoke(null);
+                log(module, 4, "NAVSTATE up=" + up + " side=" + side
+                        + " hideMode=" + (up || sideHide) + " navState=" + navState);
+            } catch (Throwable ignored) {
+                // Probe logging must never disturb the funnel.
+            }
+        }
+        // S0-END
 
         private static void hookProxyGetter(XposedModule module, ClassLoader loader, String className) {
             try {
