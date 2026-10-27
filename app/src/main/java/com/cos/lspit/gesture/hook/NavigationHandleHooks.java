@@ -129,6 +129,14 @@ public final class NavigationHandleHooks {
     private static final Set<String> S0_DUMP_SEEN = new HashSet<>();
     /** P-C root flag: true only for the collectCandidates call made by resolve. */
     private static volatile boolean s0ScanRoot = false;
+    /** P-C dedupe (S5): one CONTAINER_CHILD per (cls|stateOk|admitted|nameHit) tuple. */
+    private static final Set<String> S0_CHILD_SEEN = new HashSet<>();
+    /** S5 budget: max 48 CONTAINER_SWEEP lines per process (level-triggered). */
+    private static final AtomicInteger S0_CONTAINER_SWEEP = new AtomicInteger();
+    /** S5 diagnostics for the CURRENT root scan only (reset per resolveSuppressTargets). */
+    private static int s0SweepContainers;
+    private static int s0SweepContainerAdmitted;
+    private static int s0SweepSiblingAdmitted;
     // S0-END
 
     private NavigationHandleHooks() {}
@@ -968,6 +976,9 @@ public final class NavigationHandleHooks {
             Set<View> candidates = new HashSet<>();
             // S0-BEGIN
             s0ScanRoot = true;
+            s0SweepContainers = 0;
+            s0SweepContainerAdmitted = 0;
+            s0SweepSiblingAdmitted = 0;
             // S0-END
             collectCandidates(navBar, candidates);
             // S0-BEGIN
@@ -982,6 +993,7 @@ public final class NavigationHandleHooks {
             sTargetsResolved = true;
             // S0-BEGIN
             navBarDump(navBar);
+            logContainerSweep(candidates, newOnes);
             // S0-END
         }
 
@@ -1048,8 +1060,12 @@ public final class NavigationHandleHooks {
                                 childVis == View.VISIBLE, childAlpha, childW, childH, false);
                 // S0-BEGIN
                 if (container) {
+                    s0SweepContainers++;
+                    if (admitted) s0SweepContainerAdmitted++;
                     logContainerChild(childCls, childVis, childAlpha, childW, childH,
                             stateOk, admitted, nameHit);
+                } else if (admitted) {
+                    s0SweepSiblingAdmitted++;
                 }
                 // S0-END
                 if (admitted) {
@@ -1087,15 +1103,32 @@ public final class NavigationHandleHooks {
         }
 
         /**
-         * S3 P-C: the CONTAINER_CHILD line, emitted only for direct {@code ViewGroup}
-         * children. {@code admitted} and {@code nameHit} are the exact values the
-         * policy returned / the single whitelist implementation produced at this
-         * same call site, so the equivalence {@code admitted == (stateOk && nameHit)}
-         * is locked mechanically rather than by inspection.
+         * S3 P-C: the CONTAINER_CHILD line, emitted for every {@code ViewGroup} child
+         * encountered while walking the tree. {@code admitted} and {@code nameHit} are
+         * the exact values the policy returned / the single whitelist implementation
+         * produced at this same call site, so the equivalence
+         * {@code admitted == (stateOk && nameHit)} is locked mechanically rather than
+         * by inspection.
+         *
+         * <p>S5 emission rate: the line is deduped by the state tuple
+         * {@code cls|stateOk|admitted|nameHit} -- same idea as {@link #navBarDump}'s
+         * visibility-tuple dedupe. Without it a single root scan emitted ~13-16 rows
+         * and the 48-per-process budget was spent within ~15 ms, while the layout was
+         * still zero-sized, so a {@code stateOk=1} row could never be observed.
+         * Deduping keeps the semantics ("report it whether or not it is admitted")
+         * while making the row for each distinct state appear exactly once: a container
+         * that is zero-sized before layout and properly sized after produces two
+         * different tuples, so both rows are emitted. {@code alpha} is deliberately
+         * NOT part of the key (alpha jitter must not multiply the rows).
          */
         private static void logContainerChild(String cls, int vis, float alpha, int w, int h,
                 boolean stateOk, boolean admitted, boolean nameHit) {
             try {
+                String key = cls + "|" + (stateOk ? 1 : 0)
+                        + "|" + (admitted ? 1 : 0) + "|" + (nameHit ? 1 : 0);
+                synchronized (S0_CHILD_SEEN) {
+                    if (!S0_CHILD_SEEN.add(key)) return;
+                }
                 int n = S0_CONTAINER_CHILD.incrementAndGet();
                 if (n > 48) return;
                 log(4, "CONTAINER_CHILD n=" + n
@@ -1105,6 +1138,45 @@ public final class NavigationHandleHooks {
                         + " w=" + w + " h=" + h
                         + " admitted=" + (admitted ? 1 : 0)
                         + " nameHit=" + (nameHit ? 1 : 0));
+            } catch (Throwable ignored) {
+                // Probe logging must never disturb the suppression path.
+            }
+        }
+
+        /**
+         * S5 P-C: level-triggered sweep line -- emitted on <strong>every</strong>
+         * {@code resolveSuppressTargets} scan, not only when something new is admitted.
+         *
+         * <p>Field definitions (plan §6.2, written down here so the invariant is in the
+         * code): {@code containers} counts every encountered {@code ViewGroup} child
+         * <em>including recursion levels</em>, matching {@code containerAdmitted}'s
+         * counter so the invariant {@code containers >= containerAdmitted} cannot break
+         * when a deep container is admitted. {@code candidates} is the total admitted
+         * painter count ({@code containerAdmitted + siblingAdmitted}), so
+         * {@code admittedTotal >= candidates} after the merge.
+         *
+         * <p>{@code containerAdmitted} and {@code siblingAdmitted} are
+         * <strong>diagnostics only</strong> -- they may be flipped by our own
+         * {@link #zeroTarget} on a later scan, so no judgement may key off them.
+         * The only sanctioned judge is {@code NAME_HIT} (§6.2).
+         */
+        private static void logContainerSweep(Set<View> candidates, Set<View> newOnes) {
+            try {
+                int n = S0_CONTAINER_SWEEP.incrementAndGet();
+                if (n > 48) return;
+                int candidateCount = candidates == null ? 0 : candidates.size();
+                int newCount = newOnes == null ? 0 : newOnes.size();
+                int admittedTotal;
+                synchronized (sSuppressTargets) {
+                    admittedTotal = sSuppressTargets.size();
+                }
+                log(4, "CONTAINER_SWEEP n=" + n
+                        + " candidates=" + candidateCount
+                        + " containers=" + s0SweepContainers
+                        + " containerAdmitted=" + s0SweepContainerAdmitted
+                        + " siblingAdmitted=" + s0SweepSiblingAdmitted
+                        + " admittedTotal=" + admittedTotal
+                        + " new=" + newCount);
             } catch (Throwable ignored) {
                 // Probe logging must never disturb the suppression path.
             }
