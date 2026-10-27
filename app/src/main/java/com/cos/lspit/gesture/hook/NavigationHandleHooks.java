@@ -1001,9 +1001,29 @@ public final class NavigationHandleHooks {
                 View child = group.getChildAt(i);
                 if (child == null) continue;
                 boolean container = child instanceof ViewGroup;
-                if (BarPixelPolicy.admitsSibling(child.getClass().getName(),
-                        child.getVisibility() == View.VISIBLE, child.getAlpha(),
-                        child.getWidth(), child.getHeight(), container)) {
+                String childCls = child.getClass().getName();
+                int childVis = child.getVisibility();
+                float childAlpha = child.getAlpha();
+                int childW = child.getWidth();
+                int childH = child.getHeight();
+                boolean stateOk = (childVis == 0) && (childAlpha > 0f)
+                        && (childW > 0) && (childH > 0);
+                boolean nameHit = container && BarPixelPolicy.nameMatches(childCls);
+                // Container channel never honours the sibling name fragments; the
+                // non-container channel keeps the historical call exactly (same args
+                // as before, container already false on this branch).
+                boolean admitted = container
+                        ? BarPixelPolicy.admitsContainerPainter(childCls,
+                                childVis == View.VISIBLE, childAlpha, childW, childH)
+                        : BarPixelPolicy.admitsSibling(childCls,
+                                childVis == View.VISIBLE, childAlpha, childW, childH, false);
+                // S0-BEGIN
+                if (container) {
+                    logContainerChild(childCls, childVis, childAlpha, childW, childH,
+                            stateOk, admitted, nameHit);
+                }
+                // S0-END
+                if (admitted) {
                     out.add(child);
                 }
                 collectCandidates(child, out);
@@ -1012,10 +1032,12 @@ public final class NavigationHandleHooks {
 
         // S0-BEGIN
         /**
-         * S0 P-C: one CONTAINER_SCAN for the root call plus one CONTAINER_CHILD for
-         * every direct {@code ViewGroup} child. Pure observation -- it re-reads the
-         * same children {@link #collectCandidates} is about to visit and never
-         * touches the candidate set.
+         * S0 P-C: one CONTAINER_SCAN for the root call. Pure observation -- it
+         * re-reads the same children {@link #collectCandidates} is about to visit
+         * and never touches the candidate set. The per-child CONTAINER_CHILD line
+         * moved into {@link #collectCandidates} at S3 so that its {@code admitted=}
+         * / {@code nameHit=} fields are evaluated in the same place as the policy
+         * return value (no second call site).
          */
         private static void containerScan(ViewGroup group) {
             try {
@@ -1030,22 +1052,30 @@ public final class NavigationHandleHooks {
                     }
                     log(4, "CONTAINER_SCAN entered=" + entered + " vgChildren=" + vgChildren);
                 }
-                for (int i = 0; i < group.getChildCount(); i++) {
-                    View child = group.getChildAt(i);
-                    if (child == null || !(child instanceof ViewGroup)) continue;
-                    int n = S0_CONTAINER_CHILD.incrementAndGet();
-                    if (n > 48) return;
-                    int vis = child.getVisibility();
-                    float alpha = child.getAlpha();
-                    int w = child.getWidth();
-                    int h = child.getHeight();
-                    boolean stateOk = (vis == 0) && (alpha > 0f) && (w > 0) && (h > 0);
-                    log(4, "CONTAINER_CHILD n=" + n
-                            + " stateOk=" + (stateOk ? 1 : 0)
-                            + " cls=" + child.getClass().getName()
-                            + " vis=" + vis + " alpha=" + alpha
-                            + " w=" + w + " h=" + h);
-                }
+            } catch (Throwable ignored) {
+                // Probe logging must never disturb the suppression path.
+            }
+        }
+
+        /**
+         * S3 P-C: the CONTAINER_CHILD line, emitted only for direct {@code ViewGroup}
+         * children. {@code admitted} and {@code nameHit} are the exact values the
+         * policy returned / the single whitelist implementation produced at this
+         * same call site, so the equivalence {@code admitted == (stateOk && nameHit)}
+         * is locked mechanically rather than by inspection.
+         */
+        private static void logContainerChild(String cls, int vis, float alpha, int w, int h,
+                boolean stateOk, boolean admitted, boolean nameHit) {
+            try {
+                int n = S0_CONTAINER_CHILD.incrementAndGet();
+                if (n > 48) return;
+                log(4, "CONTAINER_CHILD n=" + n
+                        + " stateOk=" + (stateOk ? 1 : 0)
+                        + " cls=" + cls
+                        + " vis=" + vis + " alpha=" + alpha
+                        + " w=" + w + " h=" + h
+                        + " admitted=" + (admitted ? 1 : 0)
+                        + " nameHit=" + (nameHit ? 1 : 0));
             } catch (Throwable ignored) {
                 // Probe logging must never disturb the suppression path.
             }
