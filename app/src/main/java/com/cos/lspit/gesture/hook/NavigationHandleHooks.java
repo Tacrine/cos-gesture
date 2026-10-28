@@ -141,6 +141,21 @@ public final class NavigationHandleHooks {
     private static int s0SweepSiblingAdmitted;
     // S0-END
 
+    // S9-BEGIN
+    // DIAGNOSTIC ONLY (plan S9). Nothing in this block is read by any gate, write,
+    // return value or call order; every use is a log line plus a budget counter.
+    /** S9: max 64 NAVWRITE_ALPHA lines per process. */
+    private static final AtomicInteger S9_NAVWRITE_ALPHA = new AtomicInteger();
+    /** S9: max 64 NAVWRITE_VIS lines per process. */
+    private static final AtomicInteger S9_NAVWRITE_VIS = new AtomicInteger();
+    /** S9: max 96 TREE_DUMP lines per process. */
+    private static final AtomicInteger S9_TREE_DUMP = new AtomicInteger();
+    /** S9: TREE_DUMP dedupe key (cls|w|h|vis). */
+    private static final Set<String> S9_TREE_SEEN = new HashSet<>();
+    /** S9: max 32 RECHECK_STATE lines per process. */
+    private static final AtomicInteger S9_RECHECK_STATE = new AtomicInteger();
+    // S9-END
+
     private NavigationHandleHooks() {}
 
     private static int handleCount() {
@@ -827,6 +842,7 @@ public final class NavigationHandleHooks {
             public void run() {
                 sShadeRecheckPending = false;
                 View view = sShadeRecheckView;
+                recheckState("fire", SHADE_RECHECK_MS);     // S9 DIAG
                 if (view == null) return;
                 refreshShadeCache(view);
                 if (suppressionGate()) scheduleShadeRecheck(view);
@@ -930,6 +946,127 @@ public final class NavigationHandleHooks {
             }
         }
 
+        // S9-BEGIN
+        // DIAGNOSTIC ONLY. These helpers print; none of them influences a decision.
+        /** S9: logs EVERY setAlpha call, not only the ones we rewrite. */
+        private static void navWriteAlpha(XposedModule module, Object thiz, float value,
+                boolean gate, boolean inBar, boolean inTargets, boolean forced) {
+            try {
+                if (S9_NAVWRITE_ALPHA.incrementAndGet() > 64) return;
+                log(module, 4, "NAVWRITE_ALPHA cls="
+                        + (thiz == null ? "null" : thiz.getClass().getName())
+                        + " value=" + value
+                        + " gate=" + (gate ? 1 : 0)
+                        + " shade=" + (sShadeExpandedCache ? 1 : 0)
+                        + " inBar=" + (inBar ? 1 : 0)
+                        + " inTargets=" + (inTargets ? 1 : 0)
+                        + " forced=" + (forced ? 1 : 0));
+            } catch (Throwable ignored) {
+                // Probe logging must never disturb the suppression path.
+            }
+        }
+
+        /** S9: logs EVERY setVisibility call on the OEM guide-bar owner. */
+        static void navWriteVis(XposedModule module, String cls, int value, String invoked) {
+            try {
+                if (S9_NAVWRITE_VIS.incrementAndGet() > 64) return;
+                log(module, 4, "NAVWRITE_VIS cls=" + cls
+                        + " value=" + value
+                        + " gate=" + (suppressionGate() ? 1 : 0)
+                        + " shade=" + (sShadeExpandedCache ? 1 : 0)
+                        + " invoked=" + invoked);
+            } catch (Throwable ignored) {
+                // Probe logging must never disturb the suppression path.
+            }
+        }
+
+        /** S9: schedule/cancel/fire transitions of the 5 s shade recheck. */
+        static void recheckState(String at, long delay) {
+            try {
+                if (S9_RECHECK_STATE.incrementAndGet() > 32) return;
+                log(4, "RECHECK_STATE at=" + at
+                        + " delay=" + delay
+                        + " shade=" + (sShadeExpandedCache ? 1 : 0)
+                        + " gate=" + (suppressionGate() ? 1 : 0));
+            } catch (Throwable ignored) {
+                // Probe logging must never disturb the suppression path.
+            }
+        }
+
+        private static void treeCollect(View v, List<View> out) {
+            if (v == null || out == null) return;
+            out.add(v);
+            if (!(v instanceof ViewGroup)) return;
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                treeCollect(g.getChildAt(i), out);
+            }
+        }
+
+        private static String parentName(View v) {
+            try {
+                android.view.ViewParent p = v.getParent();
+                if (p == null) return "none";
+                if (p instanceof View) return ((View) p).getClass().getName();
+                return p.getClass().getName();
+            } catch (Throwable ignored) {
+                return "?";
+            }
+        }
+
+        /**
+         * S9: sized-only descendant dump. NAVBAR_DUMP shows alpha but samples mostly
+         * zero-sized views, so the painter of the visible pill never stood out. This one
+         * keeps only {@code w>0 && h>0} and lists the suspect geometry
+         * (150..260 x 6..20, i.e. a 210x12-like pill) first.
+         */
+        private static void treeDump(View navBar) {
+            try {
+                if (navBar == null) return;
+                List<View> all = new ArrayList<>();
+                treeCollect(navBar, all);
+                List<View> suspect = new ArrayList<>();
+                List<View> rest = new ArrayList<>();
+                int scanned = 0;
+                for (View v : all) {
+                    if (v == null) continue;
+                    int w = v.getWidth();
+                    int h = v.getHeight();
+                    if (w <= 0 || h <= 0) continue;
+                    scanned++;
+                    if (w >= 150 && w <= 260 && h >= 6 && h <= 20) suspect.add(v);
+                    else rest.add(v);
+                }
+                List<View> ordered = new ArrayList<>(all.size());
+                ordered.addAll(suspect);
+                ordered.addAll(rest);
+                int emitted = 0;
+                for (View v : ordered) {
+                    String cls = v.getClass().getName();
+                    int vis = v.getVisibility();
+                    int w = v.getWidth();
+                    int h = v.getHeight();
+                    String key = cls + "|" + w + "|" + h + "|" + vis;
+                    synchronized (S9_TREE_SEEN) {
+                        if (!S9_TREE_SEEN.add(key)) continue;
+                    }
+                    if (S9_TREE_DUMP.incrementAndGet() > 96) {
+                        log(4, "TREE_DUMP_TRUNCATED scanned=" + scanned + " emitted=" + emitted);
+                        return;
+                    }
+                    emitted++;
+                    log(4, "TREE_DUMP cls=" + cls
+                            + " w=" + w + " h=" + h + " vis=" + vis
+                            + " alpha=" + v.getAlpha()
+                            + " x=" + v.getX() + " y=" + v.getY()
+                            + " parent=" + parentName(v));
+                }
+            } catch (Throwable ignored) {
+                // Probe logging must never disturb the suppression path.
+            }
+        }
+        // S9-END
+
         /**
          * Probe-only: reports one admitted sibling painter from the SAME target set the
          * suppression path uses (no second, looser policy anywhere).
@@ -1018,6 +1155,8 @@ public final class NavigationHandleHooks {
             // S0-BEGIN
             navBarDump(navBar);
             logContainerSweep(candidates, newOnes);
+            // S9 DIAG: sized-only descendant dump (log only).
+            treeDump(navBar);
             // S0-END
         }
 
@@ -1382,9 +1521,13 @@ public final class NavigationHandleHooks {
         static void scheduleShadeRecheck(View view) {
             if (view == null) return;
             sShadeRecheckView = view;
-            if (sShadeRecheckPending) return;
+            if (sShadeRecheckPending) {
+                recheckState("renew", SHADE_RECHECK_MS);    // S9 DIAG
+                return;
+            }
             sShadeRecheckPending = true;
             view.postDelayed(SHADE_RECHECK, SHADE_RECHECK_MS);
+            recheckState("schedule", SHADE_RECHECK_MS);     // S9 DIAG
         }
 
         /** C6: cancels the periodic recheck (restore path and detach hook). */
@@ -1393,6 +1536,7 @@ public final class NavigationHandleHooks {
             sShadeRecheckView = null;
             if (view == null) return;
             view.removeCallbacks(SHADE_RECHECK);
+            recheckState("cancel", SHADE_RECHECK_MS);       // S9 DIAG
         }
 
         /** C7: re-resolve after a layout pass (sibling views may have been rebuilt). */
@@ -1426,6 +1570,23 @@ public final class NavigationHandleHooks {
                             // else (a listener or an animation writing a sibling) is not
                             // ours and must be judged by the gate below.
                             Object thiz = chain.getThisObject();
+                            // S9 DIAG: observe EVERY setAlpha call, not only ours. The
+                            // booleans below are evaluated for the log only; the real
+                            // branching further down is unchanged.
+                            try {
+                                float seenValue = 0f;
+                                Object rawArg = chain.getArg(0);
+                                if (rawArg instanceof Float) seenValue = (Float) rawArg;
+                                boolean selfWrite = sModuleAlphaWrite && thiz == sAlphaWriteTarget;
+                                boolean seenBar = handle.isInstance(thiz);
+                                boolean seenInTargets = sSuppressTargets.contains(thiz);
+                                boolean seenGate = suppressionGate();
+                                boolean wouldForce = seenGate && (seenBar || seenInTargets)
+                                        && !(sModuleAlphaWrite && thiz == sAlphaWriteTarget);
+                                navWriteAlpha(module, thiz, seenValue, seenGate, seenBar,
+                                        seenInTargets, wouldForce);
+                            } catch (Throwable ignored) {
+                            }
                             if (sModuleAlphaWrite && thiz == sAlphaWriteTarget) {
                                 return chain.proceed();
                             }
@@ -1822,6 +1983,14 @@ public final class NavigationHandleHooks {
                                     && S0_GUIDEBAR_VIS.incrementAndGet() <= 16) {
                                 log(module, 4, "GUIDEBAR_VIS arg=" + arg
                                         + " pre=" + pre + " post=" + post + " cls=" + cls);
+                            }
+                            // S9 DIAG: every call, including the cases the GUIDEBAR_VIS
+                            // budget/dedupe would never reach.
+                            try {
+                                HiddenBar.navWriteVis(module, cls,
+                                        arg instanceof Integer ? ((Integer) arg).intValue() : -999,
+                                        "setVisibility");
+                            } catch (Throwable ignored) {
                             }
                             return result;
                         });
