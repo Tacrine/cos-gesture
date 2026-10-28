@@ -170,6 +170,14 @@ public final class NavigationHandleHooks {
     private static final long S10_WATCHDOG_MS = 500L;
     // S10-END
 
+    // S11-BEGIN
+    /** S11: max 32 WATCHDOG_TICK lines per process (deliberately not 64). */
+    private static final AtomicInteger S11_WATCHDOG_TICK = new AtomicInteger();
+    /** S11: lock + last-emitted tick signature, so only changes are logged. */
+    private static final Object S11_TICK_LOCK = new Object();
+    private static String s11TickState = "";
+    // S11-END
+
     private NavigationHandleHooks() {}
 
     private static int handleCount() {
@@ -1113,24 +1121,62 @@ public final class NavigationHandleHooks {
         private static final Runnable S10_WATCHDOG = new Runnable() {
             @Override
             public void run() {
+                int wrote = 0;
+                int handles = 0;
+                boolean shadeNow = false;
+                boolean masterOn = false;
                 try {
-                    if (suppressionGate()) {
-                        View[] snapshot;
-                        synchronized (sHandles) {
-                            snapshot = sHandles.toArray(new View[0]);
+                    View[] snapshot;
+                    synchronized (sHandles) {
+                        snapshot = sHandles.toArray(new View[0]);
+                    }
+                    // S11: ask the LIVE shade state instead of trusting sShadeExpandedCache.
+                    // That cache is only written by refreshShadeCache(), which -- per the
+                    // on-device evidence -- is not called after the shade collapses, so it
+                    // stays stuck at true and made the whole watchdog a no-op (S10 FAIL).
+                    View probe = null;
+                    for (View v : snapshot) {
+                        if (v != null) {
+                            probe = v;
+                            break;
                         }
+                    }
+                    shadeNow = (probe != null) && isShadeExpanded(probe);
+                    if (probe == null) {
+                        // No handle to ask: treat the shade as collapsed and still suppress
+                        // (suppressing when we should not is far cheaper than a stuck bar).
+                        log(4, "WATCHDOG_NO_PROBE handles=0 shadeNow=0");
+                    }
+                    // Keep the cache honest for every other reader. Deliberately NOT calling
+                    // refreshShadeCache() here: that path also restores/arms targets and is
+                    // the known-unreliable trigger we are working around.
+                    sShadeExpandedCache = shadeNow;
+                    // Same two terms as suppressionGate(), with the live shade value.
+                    masterOn = BarPixelPolicy.shouldSuppress(
+                            GestureConfigClient.isBarHiddenEnabled(),
+                            SystemHide.sConvertedHideActive, false);
+                    if (masterOn && !shadeNow) {
                         for (View v : snapshot) {
                             if (v == null) continue;
+                            handles++;
                             try {
-                                if (v.getAlpha() != 0f) zeroTarget(v);
+                                if (v.getAlpha() != 0f) {
+                                    zeroTarget(v);
+                                    wrote++;
+                                }
                             } catch (Throwable ignored) {
                                 // One bad handle must not stop the loop.
                             }
+                        }
+                    } else {
+                        for (View v : snapshot) {
+                            if (v != null) handles++;
                         }
                     }
                 } catch (Throwable ignored) {
                     // Never let a tick kill the loop.
                 }
+                watchdogTick(shadeNow, masterOn, handles, wrote);
                 // Self-renew. Deliberately unconditional: while the shade is expanded this
                 // tick does nothing but must keep the loop alive for the collapse.
                 try {
@@ -1139,6 +1185,25 @@ public final class NavigationHandleHooks {
                 }
             }
         };
+
+        /** S11: change-triggered tick log, cheap enough at 500 ms. */
+        private static void watchdogTick(boolean shadeNow, boolean masterOn,
+                int handles, int wrote) {
+            try {
+                String state = (shadeNow ? 1 : 0) + "|" + (masterOn ? 1 : 0) + "|" + wrote;
+                synchronized (S11_TICK_LOCK) {
+                    if (state.equals(s11TickState)) return;
+                    s11TickState = state;
+                }
+                if (S11_WATCHDOG_TICK.incrementAndGet() > 32) return;
+                log(4, "WATCHDOG_TICK shadeNow=" + (shadeNow ? 1 : 0)
+                        + " masterOn=" + (masterOn ? 1 : 0)
+                        + " handles=" + handles
+                        + " wrote=" + wrote);
+            } catch (Throwable ignored) {
+                // Probe logging must never disturb the suppression path.
+            }
+        }
 
         /** S10: starts the single watchdog loop (idempotent across handle attaches). */
         static void scheduleHandleWatchdog() {
