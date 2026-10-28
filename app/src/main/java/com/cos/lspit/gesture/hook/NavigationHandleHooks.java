@@ -1119,13 +1119,22 @@ public final class NavigationHandleHooks {
          * {@code getAlpha() != 0f} pre-check keeps us from touching an already-suppressed
          * handle (no redundant writes, no record churn).
          *
-         * <p><b>S14: the tick is bidirectional.</b> When suppression is not wanted -- the
-         * shade is expanded, or the hide switches are off -- the tick does not merely skip
-         * the write, it calls {@code restoreTargets()} so the bar becomes visible again
-         * (plan section 8 risk 1 / G-N2 require exactly that). Skipping the write would
-         * leave the bar invisible and quietly break that design allowance, which is the
-         * regression S14 fixes. The opposite direction is covered by the next tick:
-         * after the shade collapses, the following tick re-zeroes within 500 ms.
+         * <p><b>S15: always hidden while the feature is on.</b> The tick presses down on
+         * every tick for as long as {@code masterOn} is true -- the hide switch is on or the
+         * system gesture-hide is active -- and it <b>no longer lets the bar through when the
+         * shade is expanded</b>. That shade allowance was the S14 behaviour (plan section 8
+         * risk 1 / G-N2); the user explicitly asked on 2026-10-28 that the bar stay hidden
+         * while the notification shade is open, so the allowance is retired and G-N2 now
+         * reads "no bar in the expanded state = pass".
+         *
+         * <p>{@code restoreTargets()} is still called, but only when {@code masterOn} is
+         * false, i.e. when the user turns the hide switch off or the feature is disabled.
+         * Without that branch, switching the feature off would leave the bar permanently
+         * invisible (oracle item 8).
+         *
+         * <p>{@code shadeExpanded} is still measured and written back to
+         * {@code sShadeExpandedCache} because other readers consult it, but it no longer
+         * takes part in the press-down decision.
          */
         private static final Runnable S10_WATCHDOG = new Runnable() {
             @Override
@@ -1164,10 +1173,14 @@ public final class NavigationHandleHooks {
                     masterOn = BarPixelPolicy.shouldSuppress(
                             GestureConfigClient.isBarHiddenEnabled(),
                             SystemHide.sConvertedHideActive, false);
-                    if (masterOn && !shadeNow) {
+                    for (View v : snapshot) {
+                        if (v != null) handles++;
+                    }
+                    // S15: press down whenever the feature is on -- shadeExpanded is NOT a
+                    // reason to let the bar through any more (user requirement 2026-10-28).
+                    if (masterOn) {
                         for (View v : snapshot) {
                             if (v == null) continue;
-                            handles++;
                             try {
                                 if (v.getAlpha() != 0f) {
                                     // S14: count only real writes -- zeroTarget returns false
@@ -1180,17 +1193,11 @@ public final class NavigationHandleHooks {
                             }
                         }
                     } else {
-                        // S14: the tick is bidirectional. Suppression is not wanted right now
-                        // (shade expanded, or the hide switches are off), so undo our own
-                        // writes instead of merely "not writing" -- not writing leaves the bar
-                        // invisible and silently breaks the "visible while the shade is open"
-                        // behaviour (plan section 8 risk 1 / G-N2). The cache was set to the
-                        // live shade value on the line above, so restoreTargets()'s own gate
-                        // reads shadeNow and lets the restore through. The collapse direction
-                        // is handled by the next tick (<= 500 ms), which re-zeroes.
-                        for (View v : snapshot) {
-                            if (v != null) handles++;
-                        }
+                        // S15: the ONLY restore path left. Reached when masterOn is false,
+                        // i.e. the user turned the hide switch off or the feature is
+                        // disabled; the bar must come back then (oracle item 8). The cache
+                        // above already holds the live shade value, so restoreTargets()'s own
+                        // gate agrees with this branch.
                         try {
                             if (!sRecordedAlpha.isEmpty()) {
                                 restoreTargets();
