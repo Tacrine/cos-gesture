@@ -1048,6 +1048,20 @@ public final class NavigationHandleHooks {
                 if (v == null) continue;
                 try { resolveSuppressTargets(navBarAncestor(v)); } catch (Throwable ignored) {}
             }
+            // S8: the handle itself is the hint bar the user sees, and it is NOT in
+            // sSuppressTargets -- neither the sibling name gate nor the container whitelist
+            // matches it, and its own w/h read as 0, so collectCandidates can never pick it
+            // up. The only other place that zeroes it is the onDraw interceptor, which does
+            // not run when nothing repaints. After restoreTargets() put its alpha back to 1.0
+            // and dropped the record, that left the bar on screen until the next redraw
+            // (gesture / app switch) -- exactly the reported symptom. Zero it here in the
+            // same pass so the re-arm no longer depends on a repaint.
+            // The gate check at the top of this method already returns early while the shade
+            // is expanded, so the "shade must stay visible" allowance is unaffected.
+            for (View v : snapshot) {
+                if (v == null) continue;
+                try { zeroTarget(v); } catch (Throwable ignored) {}
+            }
         }
 
         /** C3.2: admit siblings that pass the pure policy; containers never qualify. */
