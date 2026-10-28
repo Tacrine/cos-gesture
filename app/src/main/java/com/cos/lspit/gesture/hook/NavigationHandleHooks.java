@@ -133,6 +133,8 @@ public final class NavigationHandleHooks {
     private static final Set<String> S0_CHILD_SEEN = new HashSet<>();
     /** S5 budget: max 48 CONTAINER_SWEEP lines per process (level-triggered). */
     private static final AtomicInteger S0_CONTAINER_SWEEP = new AtomicInteger();
+    /** S7 budget: max 16 AFTER_ZERO lines per process (the only post-write reading). */
+    private static final AtomicInteger S0_AFTER_ZERO = new AtomicInteger();
     /** S5 diagnostics for the CURRENT root scan only (reset per resolveSuppressTargets). */
     private static int s0SweepContainers;
     private static int s0SweepContainerAdmitted;
@@ -865,6 +867,8 @@ public final class NavigationHandleHooks {
                                             }
                                             // momus obs5: the single alpha writer, even here.
                                             zeroTarget(view);
+                                            // S7: read the property back after the write.
+                                            logAfterZero(view);
                                             return null; // skip drawing the hint bar
                                         }
                                     }
@@ -909,13 +913,33 @@ public final class NavigationHandleHooks {
         }
 
         /**
+         * S7: the only post-write reading in the build. {@link #logPixelState} samples the
+         * alpha <strong>before</strong> {@link #zeroTarget} runs, so no existing line can
+         * prove the suppression reached the view's pixel property; this one reads the
+         * property back in the same frame, right after the write.
+         */
+        private static void logAfterZero(View view) {
+            try {
+                if (view == null) return;
+                if (S0_AFTER_ZERO.incrementAndGet() > 16) return;
+                log(4, "AFTER_ZERO cls=" + view.getClass().getName()
+                        + " alpha=" + view.getAlpha()
+                        + " vis=" + view.getVisibility());
+            } catch (Throwable ignored) {
+                // Probe logging must never disturb the suppression path.
+            }
+        }
+
+        /**
          * Probe-only: reports one admitted sibling painter from the SAME target set the
          * suppression path uses (no second, looser policy anywhere).
          */
         private static String siblingText(View handle) {
             try {
-                View navBar = navBarAncestor(handle);
-                if (navBar != null) resolveSuppressTargets(navBar);
+                // S7: strictly read-only. This used to re-run the resolver, which re-zeroed
+                // the newly admitted container even while the shade was expanded (the one
+                // state where the bar is supposed to be visible), so the reported alpha=0.0
+                // was manufactured by the probe itself. Never resolve from here again.
                 synchronized (sSuppressTargets) {
                     for (View target : sSuppressTargets) {
                         if (target == null || target == handle) continue;
@@ -1305,7 +1329,15 @@ public final class NavigationHandleHooks {
         /** C6: refresh the shade cache on a non-hot path and react to the transition. */
         static void refreshShadeCache(View view) {
             if (view == null) return;
+            boolean shadeWasExpanded = sShadeExpandedCache;
             sShadeExpandedCache = isShadeExpanded(view);
+            // S7: the shade just collapsed. The last frame was drawn while the shade was
+            // expanded (gate false, bar deliberately visible) and nothing repaints the bar
+            // on its own, so the user keeps seeing that frame until the next redraw
+            // (gesture / app switch). Only on true -> false: while the shade is expanded
+            // the bar must stay visible (plan §8 risk 1), so the true direction is
+            // intentionally left alone.
+            boolean shadeCollapsed = shadeWasExpanded && !sShadeExpandedCache;
             if (suppressionGate()) {
                 if (!sTargetsResolved) {
                     log(4, "RESUPPRESS_SHADE suppression re-armed shadeExpanded="
@@ -1321,6 +1353,13 @@ public final class NavigationHandleHooks {
                 cancelShadeRecheck(view);
             } else {
                 cancelShadeRecheck(view);
+            }
+            // S7: after the normal gate handling above (so the RESUPPRESS_SHADE line above
+            // is still emitted), re-assert the suppression explicitly. Placed last on
+            // purpose: the helper clears sTargetsResolved, which would otherwise swallow
+            // that log line. Idempotent -- zeroTarget skips views already recorded.
+            if (shadeCollapsed) {
+                recorrectIfSuppressed();
             }
         }
 
