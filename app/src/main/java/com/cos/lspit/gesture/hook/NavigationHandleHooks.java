@@ -178,6 +178,11 @@ public final class NavigationHandleHooks {
     private static String s11TickState = "";
     // S11-END
 
+    // S14-BEGIN
+    /** S14: max 32 ZERO_WRITE lines per process; only emitted on a real alpha write. */
+    private static final AtomicInteger S14_ZERO_WRITE = new AtomicInteger();
+    // S14-END
+
     private NavigationHandleHooks() {}
 
     private static int handleCount() {
@@ -910,7 +915,7 @@ public final class NavigationHandleHooks {
                                                 resolveSuppressTargets(navBarAncestor(view));
                                             }
                                             // momus obs5: the single alpha writer, even here.
-                                            zeroTarget(view);
+                                            zeroTarget(view, "indraw");
                                             // S7: read the property back after the write.
                                             logAfterZero(view);
                                             return null; // skip drawing the hint bar
@@ -1114,9 +1119,13 @@ public final class NavigationHandleHooks {
          * {@code getAlpha() != 0f} pre-check keeps us from touching an already-suppressed
          * handle (no redundant writes, no record churn).
          *
-         * <p>Never writes while the shade is expanded: {@code suppressionGate()} is
-         * {@code (moduleHide || sysConverted) && !shadeExpanded}, so an expanded shade takes
-         * the early branch below and the bar stays visible by design.
+         * <p><b>S14: the tick is bidirectional.</b> When suppression is not wanted -- the
+         * shade is expanded, or the hide switches are off -- the tick does not merely skip
+         * the write, it calls {@code restoreTargets()} so the bar becomes visible again
+         * (plan section 8 risk 1 / G-N2 require exactly that). Skipping the write would
+         * leave the bar invisible and quietly break that design allowance, which is the
+         * regression S14 fixes. The opposite direction is covered by the next tick:
+         * after the shade collapses, the following tick re-zeroes within 500 ms.
          */
         private static final Runnable S10_WATCHDOG = new Runnable() {
             @Override
@@ -1161,16 +1170,33 @@ public final class NavigationHandleHooks {
                             handles++;
                             try {
                                 if (v.getAlpha() != 0f) {
-                                    zeroTarget(v);
-                                    wrote++;
+                                    // S14: count only real writes -- zeroTarget returns false
+                                    // when its containsKey guard short-circuits, which used to
+                                    // inflate `wrote`.
+                                    if (zeroTarget(v, "watchdog")) wrote++;
                                 }
                             } catch (Throwable ignored) {
                                 // One bad handle must not stop the loop.
                             }
                         }
                     } else {
+                        // S14: the tick is bidirectional. Suppression is not wanted right now
+                        // (shade expanded, or the hide switches are off), so undo our own
+                        // writes instead of merely "not writing" -- not writing leaves the bar
+                        // invisible and silently breaks the "visible while the shade is open"
+                        // behaviour (plan section 8 risk 1 / G-N2). The cache was set to the
+                        // live shade value on the line above, so restoreTargets()'s own gate
+                        // reads shadeNow and lets the restore through. The collapse direction
+                        // is handled by the next tick (<= 500 ms), which re-zeroes.
                         for (View v : snapshot) {
                             if (v != null) handles++;
+                        }
+                        try {
+                            if (!sRecordedAlpha.isEmpty()) {
+                                restoreTargets();
+                            }
+                        } catch (Throwable ignored) {
+                            // Never let a tick kill the loop.
                         }
                     }
                 } catch (Throwable ignored) {
@@ -1263,9 +1289,9 @@ public final class NavigationHandleHooks {
          * (idempotent guard -> read alpha -> record -> write 0) and the write runs
          * inside our own window so the interceptor lets it through.
          */
-        private static void zeroTarget(View target) {
-            if (target == null) return;
-            if (sRecordedAlpha.containsKey(target)) return;
+        private static boolean zeroTarget(View target, String by) {
+            if (target == null) return false;
+            if (sRecordedAlpha.containsKey(target)) return false;
             float prev = target.getAlpha();
             sRecordedAlpha.put(target, prev);
             try {
@@ -1275,6 +1301,22 @@ public final class NavigationHandleHooks {
             } finally {
                 sModuleAlphaWrite = false;
                 sAlphaWriteTarget = null;
+            }
+            // S14: write-side probe. AFTER_ZERO only covers the onDraw path; this one also
+            // covers the timer and resolve paths, and names the writer via `by`.
+            zeroWrite(by, target, prev, 0f);
+            return true;
+        }
+
+        /** S14: logs a real alpha write, whoever made it. */
+        private static void zeroWrite(String by, View target, float from, float to) {
+            try {
+                if (S14_ZERO_WRITE.incrementAndGet() > 32) return;
+                log(4, "ZERO_WRITE by=" + by
+                        + " cls=" + (target == null ? "null" : target.getClass().getName())
+                        + " from=" + from + " to=" + to);
+            } catch (Throwable ignored) {
+                // Probe logging must never disturb the suppression path.
             }
         }
 
@@ -1300,7 +1342,7 @@ public final class NavigationHandleHooks {
             newOnes.removeAll(sSuppressTargets);
             BarPixelPolicy.mergeInto(sSuppressTargets, candidates);
             for (View target : newOnes) {
-                zeroTarget(target);
+                zeroTarget(target, "resolve");
             }
             sTargetsResolved = true;
             // S0-BEGIN
