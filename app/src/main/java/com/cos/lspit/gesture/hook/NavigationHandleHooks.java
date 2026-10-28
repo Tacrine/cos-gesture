@@ -37,6 +37,7 @@ import java.util.WeakHashMap;
 import java.lang.ref.WeakReference;
 import java.util.concurrent.ConcurrentHashMap;
 // S0-BEGIN
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 // S0-END
 
@@ -155,6 +156,19 @@ public final class NavigationHandleHooks {
     /** S9: max 32 RECHECK_STATE lines per process. */
     private static final AtomicInteger S9_RECHECK_STATE = new AtomicInteger();
     // S9-END
+
+    // S10-BEGIN
+    /** S10: one watchdog loop per process, no matter how many handles attach. */
+    private static final AtomicBoolean S10_WATCHDOG_STARTED = new AtomicBoolean();
+    /**
+     * S10: watchdog period. Trade-off, deliberately chosen: a handle can stay visible for
+     * at most about 0.5 s after a re-arm that nothing else catches, in exchange for never
+     * depending on an OEM callback (onDraw, or the two visibility funnels) that empirically
+     * does not fire after the shade collapses. Writes only happen while
+     * {@link HiddenBar#suppressionGate()} is true, i.e. never while the shade is expanded.
+     */
+    private static final long S10_WATCHDOG_MS = 500L;
+    // S10-END
 
     private NavigationHandleHooks() {}
 
@@ -343,6 +357,12 @@ public final class NavigationHandleHooks {
                             log(module, 4, "HANDLE_ATTACHED vis=" + v.getVisibility()
                                     + " id=" + System.identityHashCode(v)
                                     + " count=" + handleCount());
+                            try {
+                                // S10: the watchdog needs no OEM trigger, so it is started
+                                // as soon as the first handle exists. Idempotent inside.
+                                HiddenBar.scheduleHandleWatchdog();
+                            } catch (Throwable ignored) {
+                            }
                         }
                         return result;
                     });
@@ -1066,6 +1086,72 @@ public final class NavigationHandleHooks {
             }
         }
         // S9-END
+
+        // S10-BEGIN
+        /**
+         * S10: self-healing watchdog for the hint bar itself.
+         *
+         * <p>Problem it solves: the bar users see is {@code OplusNavigationHandle}
+         * (210x132, VISIBLE, alpha 1.0 -- confirmed on device via TREE_DUMP). Expanding the
+         * shade runs {@code restoreTargets()}, which puts its alpha back to 1.0 and drops
+         * its record; collapsing the shade then has no reliable re-arm.
+         * {@code refreshShadeCache} is often not called at all, the two OEM funnels are not
+         * called either, and no {@code onDraw} happens because nothing repaints. The bar
+         * therefore stayed on screen until the next redraw.
+         *
+         * <p>So the re-assert is driven from a timer instead of an OEM callback: every
+         * {@link #S10_WATCHDOG_MS} ms, if suppression is currently warranted, any handle
+         * whose alpha is not 0 is pushed back to 0. {@code zeroTarget} keeps the original
+         * value so {@code restoreTargets()} can still undo it, and the
+         * {@code getAlpha() != 0f} pre-check keeps us from touching an already-suppressed
+         * handle (no redundant writes, no record churn).
+         *
+         * <p>Never writes while the shade is expanded: {@code suppressionGate()} is
+         * {@code (moduleHide || sysConverted) && !shadeExpanded}, so an expanded shade takes
+         * the early branch below and the bar stays visible by design.
+         */
+        private static final Runnable S10_WATCHDOG = new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (suppressionGate()) {
+                        View[] snapshot;
+                        synchronized (sHandles) {
+                            snapshot = sHandles.toArray(new View[0]);
+                        }
+                        for (View v : snapshot) {
+                            if (v == null) continue;
+                            try {
+                                if (v.getAlpha() != 0f) zeroTarget(v);
+                            } catch (Throwable ignored) {
+                                // One bad handle must not stop the loop.
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) {
+                    // Never let a tick kill the loop.
+                }
+                // Self-renew. Deliberately unconditional: while the shade is expanded this
+                // tick does nothing but must keep the loop alive for the collapse.
+                try {
+                    new Handler(Looper.getMainLooper()).postDelayed(this, S10_WATCHDOG_MS);
+                } catch (Throwable ignored) {
+                }
+            }
+        };
+
+        /** S10: starts the single watchdog loop (idempotent across handle attaches). */
+        static void scheduleHandleWatchdog() {
+            if (!S10_WATCHDOG_STARTED.compareAndSet(false, true)) return;
+            try {
+                Handler handler = new Handler(Looper.getMainLooper());
+                handler.postDelayed(S10_WATCHDOG, S10_WATCHDOG_MS);
+                log(4, "HANDLE_WATCHDOG_START period=" + S10_WATCHDOG_MS);
+            } catch (Throwable ignored) {
+                S10_WATCHDOG_STARTED.set(false);
+            }
+        }
+        // S10-END
 
         /**
          * Probe-only: reports one admitted sibling painter from the SAME target set the
